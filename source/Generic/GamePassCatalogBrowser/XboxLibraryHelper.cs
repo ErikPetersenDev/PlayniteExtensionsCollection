@@ -135,10 +135,11 @@ namespace GamePassCatalogBrowser
 
         public void AddExpiredTag(GamePassGame gamePassGame)
         {
-            var game = GetLibraryGameFromGamePassGame(gamePassGame);
+            var game = GetLibraryGameFromGamePassGameAnySource(gamePassGame);
             if (game != null)
             {
                 PlayniteUtilities.AddTagToGame(PlayniteApi, game, gameExpiredTag);
+                PlayniteUtilities.RemoveTagFromGame(PlayniteApi, game, gameAddedTag);
                 game.SourceId = sourceXbox.Id;
                 PlayniteApi.Database.Games.Update(game);
             }
