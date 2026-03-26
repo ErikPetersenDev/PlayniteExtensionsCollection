@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Playnite.SDK.Data;
 
 namespace GamePassCatalogBrowser.Models
 {
@@ -26,6 +27,27 @@ namespace GamePassCatalogBrowser.Models
         public ProductType ProductType { get; set; }
         public bool IsPC { get; set; }
         public bool IsConsole { get; set; }
+        
+        [DontSerialize]
+        public string PlatformAndServiceLabel
+        {
+            get
+            {
+                var platforms = new List<string>();
+                if (IsPC) platforms.Add("PC");
+                if (IsConsole) platforms.Add("Console");
+
+                var service = ProductType == ProductType.EaGame ? "EA Play" : "Xbox Game Pass";
+
+                if (platforms.Count == 0 || ProductType == ProductType.Collection) 
+                {
+                    return string.Empty;
+                }
+
+                return $"{string.Join(" | ", platforms)} • {service}";
+            }
+        }
+
         public DateTime ReleaseDate { get; set; }
         public bool IsChildProduct { get; set; }
         public string ParentProductId { get; set; }
