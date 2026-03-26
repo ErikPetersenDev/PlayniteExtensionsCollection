@@ -1,4 +1,4 @@
-﻿using GamePassCatalogBrowser.Models;
+using GamePassCatalogBrowser.Models;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using PlayniteUtilitiesCommon;
@@ -158,6 +158,18 @@ namespace GamePassCatalogBrowser
                         i++;
                     }
                 }
+                else
+                {
+                    var existingGame = GetLibraryGameFromGamePassGameAnySource(game);
+                    if (existingGame != null)
+                    {
+                        var tagAdded = PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag);
+                        if (tagAdded)
+                        {
+                            PlayniteApi.Database.Games.Update(existingGame);
+                        }
+                    }
+                }
             }
 
             RefreshLibraryItems();
@@ -177,7 +189,7 @@ namespace GamePassCatalogBrowser
                 return false;
             }
 
-            if (game.ProductType != ProductType.Game)
+            if (game.ProductType != ProductType.Game && game.ProductType != ProductType.EaGame)
             {
                 return false;
             }
