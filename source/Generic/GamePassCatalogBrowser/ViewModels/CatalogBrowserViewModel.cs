@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -202,22 +202,25 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 GamePassGame game = item as GamePassGame;
 
-                switch(game.ProductType)
+                if (_collectionsFilterString != "All Games")
                 {
-                    case ProductType.Game:
-                        if (_collectionsFilterString != "Games")
-                            return false;
-                        break;
-                    case ProductType.Collection:
-                        if (_collectionsFilterString != "Collections")
-                            return false;
-                        break;
-                    case ProductType.EaGame:
-                        if (_collectionsFilterString != "EA Games")
-                            return false;
-                        break;
-                    default:
-                        break;
+                    switch(game.ProductType)
+                    {
+                        case ProductType.Game:
+                            if (_collectionsFilterString != "Games")
+                                return false;
+                            break;
+                        case ProductType.Collection:
+                            if (_collectionsFilterString != "Collections")
+                                return false;
+                            break;
+                        case ProductType.EaGame:
+                            if (_collectionsFilterString != "EA Games")
+                                return false;
+                            break;
+                        default:
+                            break;
+                    }
                 }
                 
                 if (showGamesOnLibrary == false)
@@ -250,6 +253,7 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 return new List<string>()
                 {
+                    {"All Games"},
                     {"Games"},
                     {"EA Games"},
                     {"Collections"}
