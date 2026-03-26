@@ -1,4 +1,4 @@
-﻿using Playnite.SDK;
+using Playnite.SDK;
 using Playnite.SDK.Data;
 using System;
 using System.Collections.Generic;
@@ -17,6 +17,10 @@ namespace GamePassCatalogBrowser
         public bool AddNewGames { get; set; } = false;
         public bool RemoveExpiredGames { get; set; } = false;
         public string RegionCode { get; set; } = "US";
+
+        public bool EnableConsoleCatalog { get; set; } = false;
+        public bool ShowConsoleGamesInBrowser { get; set; } = true;
+        public bool SyncConsoleGamesToLibrary { get; set; } = false;
 
         // Playnite serializes settings object to a JSON object and saves it as text file.
         // If you want to exclude some property from being saved then use `JsonDontSerialize` ignore attribute.

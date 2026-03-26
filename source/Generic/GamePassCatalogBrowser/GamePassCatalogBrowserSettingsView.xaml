@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="GamePassCatalogBrowser.GamePassCatalogBrowserSettingsView"
+<UserControl x:Class="GamePassCatalogBrowser.GamePassCatalogBrowserSettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -23,5 +23,10 @@
         <CheckBox IsChecked="{Binding Settings.AddExpiredTagToGames}" Content="{DynamicResource LOCGamePass_Catalog_Browser_SettingsAddTagRemovedGames}" Margin="0,10,0,0"/>
         <CheckBox IsChecked="{Binding Settings.AddNewGames}" Content="{DynamicResource LOCGamePass_Catalog_Browser_SettingsAddNewCatalogGamesAuto}" Margin="0,10,0,0"/>
         <CheckBox IsChecked="{Binding Settings.RemoveExpiredGames}" Content="{DynamicResource LOCGamePass_Catalog_Browser_SettingsRemoveCatalogGamesAuto}" Margin="0,10,0,0"/>
+
+        <TextBlock Text="Console Integration" FontWeight="Bold" Margin="0,20,0,5"/>
+        <CheckBox IsChecked="{Binding Settings.EnableConsoleCatalog}" Content="Enable Xbox Console Catalog Fetching (Requires running an Update)" Margin="0,5,0,0"/>
+        <CheckBox IsChecked="{Binding Settings.ShowConsoleGamesInBrowser}" Content="Show console games in the Catalog Browser window" Margin="20,5,0,0" IsEnabled="{Binding Settings.EnableConsoleCatalog}"/>
+        <CheckBox IsChecked="{Binding Settings.SyncConsoleGamesToLibrary}" Content="Synchronize console-only games to my Playnite library when adding games" Margin="20,5,0,0" IsEnabled="{Binding Settings.EnableConsoleCatalog}"/>
     </StackPanel>
 </UserControl>

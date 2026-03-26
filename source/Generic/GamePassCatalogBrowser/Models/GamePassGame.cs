@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -24,6 +24,8 @@ namespace GamePassCatalogBrowser.Models
         public string ProductId { get; set; }
         public List<string> Publishers { get; set; }
         public ProductType ProductType { get; set; }
+        public bool IsPC { get; set; }
+        public bool IsConsole { get; set; }
         public DateTime ReleaseDate { get; set; }
         public bool IsChildProduct { get; set; }
         public string ParentProductId { get; set; }

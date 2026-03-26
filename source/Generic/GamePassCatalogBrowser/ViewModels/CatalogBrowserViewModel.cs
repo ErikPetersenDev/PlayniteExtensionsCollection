@@ -29,6 +29,7 @@ namespace GamePassCatalogBrowser.ViewModels
         private bool _storeButtonEnabled;
         private bool _addButtonEnabled;
         private XboxLibraryHelper xboxLibraryHelper;
+        private GamePassCatalogBrowserSettings settings;
 
         private bool showGamesOnLibrary = true;
         public bool ShowGamesOnLibrary
@@ -66,7 +67,7 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 return false;
             }
-            if (game.ProductType == ProductType.EaGame)
+            if (!settings.SyncConsoleGamesToLibrary && game.IsConsole && !game.IsPC)
             {
                 return false;
             }
@@ -144,9 +145,10 @@ namespace GamePassCatalogBrowser.ViewModels
             //throw new NotImplementedException();
         }
 
-        public CatalogBrowserViewModel(List<GamePassGame> list, IPlayniteAPI api)
+        public CatalogBrowserViewModel(List<GamePassGame> list, IPlayniteAPI api, GamePassCatalogBrowserSettings pluginSettings)
         {
             PlayniteApi = api;
+            settings = pluginSettings;
 
             xboxLibraryHelper = new XboxLibraryHelper(api);
 
@@ -204,19 +206,28 @@ namespace GamePassCatalogBrowser.ViewModels
 
                 if (_collectionsFilterString != "All Games")
                 {
-                    switch(game.ProductType)
+                    switch (_collectionsFilterString)
                     {
-                        case ProductType.Game:
-                            if (_collectionsFilterString != "Games")
-                                return false;
+                        case "All PC":
+                            if (!game.IsPC) return false;
                             break;
-                        case ProductType.Collection:
-                            if (_collectionsFilterString != "Collections")
-                                return false;
+                        case "All Console":
+                            if (!game.IsConsole) return false;
                             break;
-                        case ProductType.EaGame:
-                            if (_collectionsFilterString != "EA Games")
-                                return false;
+                        case "PC: Xbox Game Pass":
+                            if (!game.IsPC || game.ProductType != ProductType.Game) return false;
+                            break;
+                        case "PC: EA Play":
+                            if (!game.IsPC || game.ProductType != ProductType.EaGame) return false;
+                            break;
+                        case "Console: Xbox Game Pass":
+                            if (!game.IsConsole || game.ProductType != ProductType.Game) return false;
+                            break;
+                        case "Console: EA Play":
+                            if (!game.IsConsole || game.ProductType != ProductType.EaGame) return false;
+                            break;
+                        case "Collections":
+                            if (game.ProductType != ProductType.Collection) return false;
                             break;
                         default:
                             break;
@@ -254,8 +265,12 @@ namespace GamePassCatalogBrowser.ViewModels
                 return new List<string>()
                 {
                     {"All Games"},
-                    {"Games"},
-                    {"EA Games"},
+                    {"All PC"},
+                    {"All Console"},
+                    {"PC: Xbox Game Pass"},
+                    {"PC: EA Play"},
+                    {"Console: Xbox Game Pass"},
+                    {"Console: EA Play"},
                     {"Collections"}
                 };
             }

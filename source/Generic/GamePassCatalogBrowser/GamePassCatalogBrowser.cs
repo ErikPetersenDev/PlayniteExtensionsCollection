@@ -1,4 +1,4 @@
-﻿using Playnite.SDK;
+using Playnite.SDK;
 using Playnite.SDK.Events;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
@@ -126,7 +126,7 @@ namespace GamePassCatalogBrowser
                 PlayniteApi.Dialogs.ActivateGlobalProgress((a) =>
                 {
                     var gamePassGamesList = new List<GamePassGame>();
-                    var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode);
+                    var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary);
                     gamePassGamesList = service.GetGamePassGamesList();
                     if (gamePassGamesList.Count == 0)
                     {
@@ -146,7 +146,7 @@ namespace GamePassCatalogBrowser
             var gamePassGamesList = new List<GamePassGame>();
             PlayniteApi.Dialogs.ActivateGlobalProgress((a) =>
             {
-                var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode);
+                var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary);
                 if (resetCache == true)
                 {
                     service.DeleteCache();
@@ -167,6 +167,11 @@ namespace GamePassCatalogBrowser
                 return;
             }
 
+            if (!settings.Settings.ShowConsoleGamesInBrowser)
+            {
+                gamePassGamesList.RemoveAll(g => g.IsConsole && !g.IsPC);
+            }
+
             var window = PlayniteApi.Dialogs.CreateWindow(new WindowCreationOptions
             {
                 ShowMinimizeButton = false
@@ -174,7 +179,7 @@ namespace GamePassCatalogBrowser
 
             window.Title = "Game Pass Catalog Browser";
             window.Content = new CatalogBrowserView();
-            CatalogBrowserViewModel catalogBrowserViewModel = new CatalogBrowserViewModel(gamePassGamesList, PlayniteApi);
+            CatalogBrowserViewModel catalogBrowserViewModel = new CatalogBrowserViewModel(gamePassGamesList, PlayniteApi, settings.Settings);
             window.DataContext = catalogBrowserViewModel;
             window.Owner = PlayniteApi.Dialogs.GetCurrentAppWindow();
             window.WindowStartupLocation = WindowStartupLocation.CenterOwner;

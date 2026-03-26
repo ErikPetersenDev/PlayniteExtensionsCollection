@@ -20,27 +20,38 @@ namespace GamePassCatalogBrowser
     {
         private IPlayniteAPI PlayniteApi;
         private ILogger logger = LogManager.GetLogger();
-        private Guid pluginId;
-        private List<Guid> platformsList;
-        private Tag gameExpiredTag;
-        private Tag gameAddedTag;
-        private GameSource source;
-        private GameSource sourceXbox;
+        private readonly Guid pluginId = Guid.Parse("7e4fbb5e-2ae3-48d4-8ba0-6b30e7a4e287");
+        private readonly List<Guid> platformsList;
+        private readonly List<Guid> consolePlatformsList;
+        private readonly Guid sourceId;
+        private readonly Tag gameAddedTag;
+        private readonly Tag gameRemovedTag;
+        private readonly Tag gameAddedConsoleTag;
+        private readonly Tag gameRemovedConsoleTag;
+        private bool syncConsoleGames = false;
         public IEnumerable<Game> LibraryGames;
         public HashSet<string> GameIdsInLibrary;
 
-        public XboxLibraryHelper(IPlayniteAPI api)
+        public XboxLibraryHelper(IPlayniteAPI api, bool _syncConsoleGames = false)
         {
             PlayniteApi = api;
-            pluginId = Guid.Parse("7e4fbb5e-2ae3-48d4-8ba0-6b30e7a4e287");
+            syncConsoleGames = _syncConsoleGames;
             RefreshLibraryItems();
 
             var pcPlatform = PlayniteApi.Database.Platforms.Add("PC (Windows)");
             platformsList = new List<Guid> { pcPlatform.Id };
-            gameExpiredTag = PlayniteApi.Database.Tags.Add("Game Pass (Formerly on)");
+
+            var xboxOnePlatform = PlayniteApi.Database.Platforms.Add("Xbox One");
+            var xboxSeriesPlatform = PlayniteApi.Database.Platforms.Add("Xbox Series X|S");
+            consolePlatformsList = new List<Guid> { xboxOnePlatform.Id, xboxSeriesPlatform.Id };
+
+            var sourceXboxGamePass = PlayniteApi.Database.Sources.Add("Xbox Game Pass");
+            sourceId = sourceXboxGamePass.Id;
+
             gameAddedTag = PlayniteApi.Database.Tags.Add("Game Pass");
-            source = PlayniteApi.Database.Sources.Add("Xbox Game Pass");
-            sourceXbox = PlayniteApi.Database.Sources.Add("Xbox");
+            gameRemovedTag = PlayniteApi.Database.Tags.Add("Game Pass (Formerly on)");
+            gameAddedConsoleTag = PlayniteApi.Database.Tags.Add("Game Pass (Console)");
+            gameRemovedConsoleTag = PlayniteApi.Database.Tags.Add("Game Pass (Console) (Formerly on)");
         }
 
         public void RefreshLibraryItems()
@@ -87,7 +98,6 @@ namespace GamePassCatalogBrowser
                 {
                     p = Regex.Replace(p, @"\[\[(.+)\]\[(.+)\]\]", "<a href=\"$2\">$1</a>");
                     p = Regex.Replace(p, @"\[\[(.+)\]\]", "<a href=\"$1\">$1</a>");
-                    sb.AppendLine(p);
                 }
                 sb.AppendLine(p);
                 sb.AppendLine("</p>");
@@ -101,7 +111,7 @@ namespace GamePassCatalogBrowser
                 .FirstOrDefault(g => g.PluginId.Equals(pluginId) &&
                 g.GameId.Equals(gamePassGame.GameId) &&
                 g.SourceId != null &&
-                g.SourceId.Equals(source.Id));
+                g.SourceId.Equals(sourceId));
         }
 
         public Game GetLibraryGameFromGamePassGameAnySource(GamePassGame gamePassGame)
@@ -121,7 +131,7 @@ namespace GamePassCatalogBrowser
 
             if (game.Playtime > 0)
             {
-                game.SourceId = sourceXbox.Id;
+                game.SourceId = PlayniteApi.Database.Sources.Add("Xbox").Id;
                 PlayniteApi.Database.Games.Update(game);
                 return false;
             }
@@ -135,13 +145,22 @@ namespace GamePassCatalogBrowser
 
         public void AddExpiredTag(GamePassGame gamePassGame)
         {
-            var game = GetLibraryGameFromGamePassGameAnySource(gamePassGame);
-            if (game != null)
+            var gameInLibrary = GetLibraryGameFromGamePassGameAnySource(gamePassGame);
+            if (gameInLibrary != null)
             {
-                PlayniteUtilities.AddTagToGame(PlayniteApi, game, gameExpiredTag);
-                PlayniteUtilities.RemoveTagFromGame(PlayniteApi, game, gameAddedTag);
-                game.SourceId = sourceXbox.Id;
-                PlayniteApi.Database.Games.Update(game);
+                var gameRemoved = false;
+                if (PlayniteUtilities.RemoveTagFromGame(PlayniteApi, gameInLibrary, gameAddedTag)) gameRemoved = true;
+                if (PlayniteUtilities.RemoveTagFromGame(PlayniteApi, gameInLibrary, gameAddedConsoleTag)) gameRemoved = true;
+
+                var tagAdded = false;
+                if (gamePassGame.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, gameInLibrary, gameRemovedTag)) tagAdded = true;
+                if (gamePassGame.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, gameInLibrary, gameRemovedConsoleTag)) tagAdded = true;
+
+                // Fallback for cleanly importing older cached tasks where IsPC isn't stored
+                if (!tagAdded && PlayniteUtilities.AddTagToGame(PlayniteApi, gameInLibrary, gameRemovedTag)) tagAdded = true;
+
+                gameInLibrary.SourceId = PlayniteApi.Database.Sources.Add("Xbox").Id;
+                PlayniteApi.Database.Games.Update(gameInLibrary);
             }
         }
 
@@ -151,6 +170,11 @@ namespace GamePassCatalogBrowser
             using (PlayniteApi.Database.BufferedUpdate())
             foreach (GamePassGame game in gamePassGamesList.ToList())
             {
+                if (!syncConsoleGames && game.IsConsole && !game.IsPC)
+                {
+                    continue;
+                }
+
                 if (GameIdsInLibrary.Contains(game.GameId) == false)
                 {
                     var success = AddGameToLibrary(game, false);
@@ -161,10 +185,19 @@ namespace GamePassCatalogBrowser
                 }
                 else
                 {
-                    var existingGame = GetLibraryGameFromGamePassGameAnySource(game);
+                    var existingGame = PlayniteApi.Database.Games.FirstOrDefault(g => g.PluginId.Equals(pluginId) && g.GameId.Equals(game.GameId));
                     if (existingGame != null)
                     {
-                        var tagAdded = PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag);
+                        var tagAdded = false;
+                        if (game.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag)) tagAdded = true;
+                        if (game.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedConsoleTag)) tagAdded = true;
+
+                        // Let's also enforce platforms if they were already in the library but lacked console platforms
+                        if (game.IsConsole)
+                        {
+                            PlayniteUtilities.AddFeatureToGame(PlayniteApi, existingGame, new GameFeature("Xbox Series X|S"));
+                        }
+
                         if (tagAdded)
                         {
                             PlayniteApi.Database.Games.Update(existingGame);
@@ -201,17 +234,25 @@ namespace GamePassCatalogBrowser
                 return false;
             }
 
+            var newTags = new List<Guid>();
+            if (game.IsPC) newTags.Add(gameAddedTag.Id);
+            if (game.IsConsole) newTags.Add(gameAddedConsoleTag.Id);
+
+            var newPlatforms = new List<Guid>();
+            if (game.IsPC) newPlatforms.AddRange(platformsList);
+            if (game.IsConsole) newPlatforms.AddRange(consolePlatformsList);
+
             var newGame = new Game
             {
                 Name = game.Name,
                 GameId = game.GameId,
                 DeveloperIds = arrayToCompanyGuids(game.Developers),
                 PublisherIds = arrayToCompanyGuids(game.Publishers),
-                TagIds = new List<Guid>() { gameAddedTag.Id },
+                TagIds = newTags,
                 PluginId = pluginId,
-                PlatformIds = platformsList,
+                PlatformIds = newPlatforms,
                 Description = StringToHtml(game.Description, true),
-                SourceId = source.Id,
+                SourceId = sourceId,
                 CompletionStatusId = PlayniteApi.ApplicationSettings.CompletionStatus.DefaultStatus
             };
 
