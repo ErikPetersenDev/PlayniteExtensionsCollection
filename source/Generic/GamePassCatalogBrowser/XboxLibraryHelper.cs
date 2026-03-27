@@ -13,6 +13,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Globalization;
 
 namespace GamePassCatalogBrowser
 {
@@ -21,6 +22,7 @@ namespace GamePassCatalogBrowser
         private IPlayniteAPI PlayniteApi;
         private ILogger logger = LogManager.GetLogger();
         private readonly Guid pluginId = Guid.Parse("7e4fbb5e-2ae3-48d4-8ba0-6b30e7a4e287");
+        private readonly Guid xboxLibraryPluginId = Guid.Parse("0417a80d-6e46-4dc2-9fa0-c0b70a322c3f");
         private readonly List<Guid> platformsList;
         private readonly List<Guid> consolePlatformsList;
         private readonly Guid sourceId;
@@ -57,7 +59,7 @@ namespace GamePassCatalogBrowser
         public void RefreshLibraryItems()
         {
             LibraryGames = PlayniteApi.Database.Games.
-                Where(g => g.PluginId.Equals(pluginId));
+                Where(g => g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId);
 
             var gamesOnLibrary = new HashSet<string>();
             foreach (Game game in LibraryGames)
@@ -78,6 +80,15 @@ namespace GamePassCatalogBrowser
             }
 
             return list;
+        }
+
+        public static string GetNormalizedName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return string.Empty;
+            var normalized = name.ToLowerInvariant();
+            normalized = normalized.Replace("™", "").Replace("®", "").Replace("©", "");
+            normalized = Regex.Replace(normalized, @"\s+", " "); // Replace multiple spaces with single space
+            return normalized.Trim();
         }
 
         private static string StringToHtml(string s, bool nofollow)
@@ -117,7 +128,7 @@ namespace GamePassCatalogBrowser
         public Game GetLibraryGameFromGamePassGameAnySource(GamePassGame gamePassGame)
         {
             return PlayniteApi.Database.Games
-                .FirstOrDefault(g => g.PluginId.Equals(pluginId) &&
+                .FirstOrDefault(g => (g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId) &&
                 g.GameId.Equals(gamePassGame.GameId));
         }
 
@@ -171,6 +182,18 @@ namespace GamePassCatalogBrowser
             {
                 progressArgs.CurrentProgressValue = 0;
                 progressArgs.ProgressMaxValue = gamePassGamesList.Count;
+                progressArgs.Text = "Processing Game Pass catalog updates...";
+            }
+
+            // Create a fast-lookup dictionary for normalized names to avoid repeated expensive regex/replace calls
+            var libraryNormalizedNames = new Dictionary<string, Game>();
+            foreach (var libGame in LibraryGames)
+            {
+                var norm = GetNormalizedName(libGame.Name);
+                if (!string.IsNullOrEmpty(norm) && !libraryNormalizedNames.ContainsKey(norm))
+                {
+                    libraryNormalizedNames[norm] = libGame;
+                }
             }
 
             using (PlayniteApi.Database.BufferedUpdate())
@@ -189,7 +212,11 @@ namespace GamePassCatalogBrowser
                 var existingGame = LibraryGames.FirstOrDefault(g => g.GameId.Equals(game.GameId));
                 if (existingGame == null)
                 {
-                    existingGame = LibraryGames.FirstOrDefault(g => g.Name.Equals(game.Name, StringComparison.OrdinalIgnoreCase));
+                    var normalizedCatalogName = GetNormalizedName(game.Name);
+                    if (!string.IsNullOrEmpty(normalizedCatalogName) && libraryNormalizedNames.TryGetValue(normalizedCatalogName, out var match))
+                    {
+                        existingGame = match;
+                    }
                 }
 
                 if (existingGame == null)
@@ -201,9 +228,8 @@ namespace GamePassCatalogBrowser
                         i++;
                     }
                 }
-                else
+                else if (existingGame.PluginId == pluginId)
                 {
-                    if (progressArgs != null) progressArgs.Text = $"Updating (merging): {game.Name}";
                     var resultSaved = false;
                     if (game.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag)) resultSaved = true;
                     if (game.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedConsoleTag)) resultSaved = true;
@@ -219,7 +245,7 @@ namespace GamePassCatalogBrowser
                                 resultSaved = true;
                             }
                         }
-                        if (PlayniteUtilities.AddFeatureToFeatureList(existingGame, new GameFeature("Xbox Series X|S"))) resultSaved = true;
+                        if (PlayniteUtilities.AddFeatureToGame(PlayniteApi, existingGame, "Xbox Series X|S")) resultSaved = true;
                     }
 
                     if (game.IsPC)
@@ -238,6 +264,10 @@ namespace GamePassCatalogBrowser
                     {
                         PlayniteApi.Database.Games.Update(existingGame);
                     }
+                }
+                else
+                {
+                    // Match found in official Xbox Library - skip silently as requested
                 }
             }
 
