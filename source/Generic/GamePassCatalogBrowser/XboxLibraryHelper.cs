@@ -48,8 +48,8 @@ namespace GamePassCatalogBrowser
             var sourceXboxGamePass = PlayniteApi.Database.Sources.Add("Xbox Game Pass");
             sourceId = sourceXboxGamePass.Id;
 
-            gameAddedTag = PlayniteApi.Database.Tags.Add("Game Pass");
-            gameRemovedTag = PlayniteApi.Database.Tags.Add("Game Pass (Formerly on)");
+            gameAddedTag = PlayniteApi.Database.Tags.Add("Game Pass (PC)");
+            gameRemovedTag = PlayniteApi.Database.Tags.Add("Game Pass (Formerly on) (PC)");
             gameAddedConsoleTag = PlayniteApi.Database.Tags.Add("Game Pass (Console)");
             gameRemovedConsoleTag = PlayniteApi.Database.Tags.Add("Game Pass (Console) (Formerly on)");
         }
@@ -164,19 +164,37 @@ namespace GamePassCatalogBrowser
             }
         }
 
-        public int AddGamePassListToLibrary (List<GamePassGame> gamePassGamesList)
+        public int AddGamePassListToLibrary (List<GamePassGame> gamePassGamesList, GlobalProgressActionArgs progressArgs = null)
         {
             var i = 0;
+            if (progressArgs != null)
+            {
+                progressArgs.CurrentProgressValue = 0;
+                progressArgs.ProgressMaxValue = gamePassGamesList.Count;
+            }
+
             using (PlayniteApi.Database.BufferedUpdate())
             foreach (GamePassGame game in gamePassGamesList.ToList())
             {
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) break;
+                if (progressArgs != null)
+                {
+                    progressArgs.CurrentProgressValue++;
+                }
                 if (!syncConsoleGames && game.IsConsole && !game.IsPC)
                 {
                     continue;
                 }
 
-                if (GameIdsInLibrary.Contains(game.GameId) == false)
+                var existingGame = LibraryGames.FirstOrDefault(g => g.GameId.Equals(game.GameId));
+                if (existingGame == null)
                 {
+                    existingGame = LibraryGames.FirstOrDefault(g => g.Name.Equals(game.Name, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (existingGame == null)
+                {
+                    if (progressArgs != null) progressArgs.Text = $"Adding: {game.Name}";
                     var success = AddGameToLibrary(game, false);
                     if (success == true)
                     {
@@ -185,23 +203,40 @@ namespace GamePassCatalogBrowser
                 }
                 else
                 {
-                    var existingGame = PlayniteApi.Database.Games.FirstOrDefault(g => g.PluginId.Equals(pluginId) && g.GameId.Equals(game.GameId));
-                    if (existingGame != null)
+                    if (progressArgs != null) progressArgs.Text = $"Updating (merging): {game.Name}";
+                    var resultSaved = false;
+                    if (game.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag)) resultSaved = true;
+                    if (game.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedConsoleTag)) resultSaved = true;
+
+                    // Let's also enforce platforms if they were already in the library but lacked console platforms
+                    if (game.IsConsole)
                     {
-                        var tagAdded = false;
-                        if (game.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag)) tagAdded = true;
-                        if (game.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedConsoleTag)) tagAdded = true;
-
-                        // Let's also enforce platforms if they were already in the library but lacked console platforms
-                        if (game.IsConsole)
+                        foreach (var platformId in consolePlatformsList)
                         {
-                            PlayniteUtilities.AddFeatureToGame(PlayniteApi, existingGame, new GameFeature("Xbox Series X|S"));
+                            if (!existingGame.PlatformIds.Contains(platformId))
+                            {
+                                existingGame.PlatformIds.Add(platformId);
+                                resultSaved = true;
+                            }
                         }
+                        if (PlayniteUtilities.AddFeatureToFeatureList(existingGame, new GameFeature("Xbox Series X|S"))) resultSaved = true;
+                    }
 
-                        if (tagAdded)
+                    if (game.IsPC)
+                    {
+                        foreach (var platformId in platformsList)
                         {
-                            PlayniteApi.Database.Games.Update(existingGame);
+                            if (!existingGame.PlatformIds.Contains(platformId))
+                            {
+                                existingGame.PlatformIds.Add(platformId);
+                                resultSaved = true;
+                            }
                         }
+                    }
+
+                    if (resultSaved)
+                    {
+                        PlayniteApi.Database.Games.Update(existingGame);
                     }
                 }
             }

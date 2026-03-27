@@ -35,12 +35,16 @@ namespace GamePassCatalogBrowser.Models
             {
                 var platforms = new List<string>();
                 if (IsPC) platforms.Add("PC");
-                if (IsConsole) platforms.Add("Console");
+                if (IsConsole && !HideConsolePlatform) platforms.Add("Console");
 
-                var service = ProductType == ProductType.EaGame ? "EA Play" : "Xbox Game Pass";
+                var service = ProductType == ProductType.EaGame ? "EA Play" : "Game Pass";
 
-                if (platforms.Count == 0 || ProductType == ProductType.Collection) 
+                if (platforms.Count == 0) 
                 {
+                    if (ProductType == ProductType.Collection)
+                    {
+                        return service;
+                    }
                     return string.Empty;
                 }
 
@@ -52,6 +56,12 @@ namespace GamePassCatalogBrowser.Models
         public bool IsChildProduct { get; set; }
         public string ParentProductId { get; set; }
         public List<string> ChildProducts { get; set; }
+
+        [DontSerialize]
+        public bool TempIsFound { get; set; }
+
+        [DontSerialize]
+        public bool HideConsolePlatform { get; set; }
     }
 
     public enum ProductType { Collection, Game, EaGame };

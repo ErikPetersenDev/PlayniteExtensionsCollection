@@ -39,6 +39,7 @@ namespace GamePassCatalogBrowser.Services
         private readonly bool addNewGames;
         private readonly bool removeExpiredGames;
         private readonly bool enableConsoleCatalog;
+        private readonly bool showConsoleGamesInBrowser;
         public XboxLibraryHelper xboxLibraryHelper;
 
         public void DeleteCache()
@@ -46,7 +47,7 @@ namespace GamePassCatalogBrowser.Services
             FileSystem.ClearDirectory(cachePath);
         }
 
-        public GamePassCatalogBrowserService(IPlayniteAPI api, string dataPath, bool _notifyCatalogUpdates, bool _addExpiredTagToGames, bool _addNewGames, bool _removeExpiredGames, string _countryCode, bool _enableConsoleCatalog = false, bool _syncConsoleGames = false, string _languageCode = "en-us")
+        public GamePassCatalogBrowserService(IPlayniteAPI api, string dataPath, bool _notifyCatalogUpdates, bool _addExpiredTagToGames, bool _addNewGames, bool _removeExpiredGames, string _countryCode, bool _enableConsoleCatalog = false, bool _syncConsoleGames = false, bool _showConsoleGamesInBrowser = true, string _languageCode = "en-us")
         {
             playniteApi = api;
             userDataPath = dataPath;
@@ -55,6 +56,7 @@ namespace GamePassCatalogBrowser.Services
             addNewGames = _addNewGames;
             removeExpiredGames = _removeExpiredGames;
             enableConsoleCatalog = _enableConsoleCatalog;
+            showConsoleGamesInBrowser = _showConsoleGamesInBrowser;
 
             cachePath = Path.Combine(userDataPath, "cache");
             imageCachePath = Path.Combine(cachePath, "images");
@@ -184,12 +186,20 @@ namespace GamePassCatalogBrowser.Services
             return companiesList;
         }
 
-        private void AddGamesFromCatalogData(CatalogData catalogData, bool addChildProducts, ProductType gameProductType, bool isPC, bool isConsole, bool isChildProduct, string parentProductId)
+        private void AddGamesFromCatalogData(CatalogData catalogData, bool addChildProducts, ProductType gameProductType, bool isPC, bool isConsole, bool isChildProduct, string parentProductId, GlobalProgressActionArgs progressArgs = null)
         {
+            if (progressArgs != null)
+            {
+                progressArgs.ProgressMaxValue += catalogData.Products.Length;
+            }
+
             foreach (CatalogProduct product in catalogData.Products)
             {
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) return;
+
                 if (product.ProductBSchema == "ProductAddOn;3")
                 {
+                    if (progressArgs != null) progressArgs.CurrentProgressValue++;
                     continue;
                 }
 
@@ -198,27 +208,39 @@ namespace GamePassCatalogBrowser.Services
                 {
                     if (isPC) existingGame.IsPC = true;
                     if (isConsole) existingGame.IsConsole = true;
+                    existingGame.TempIsFound = true;
+                    if (progressArgs != null) progressArgs.CurrentProgressValue++;
                     continue;
                 }
+
+
 
                 var childSubproductsList = new List<string>();
                 if (product.Properties.PackageFamilyName.IsNullOrEmpty())
                 {
                     if (addChildProducts)
                     {
-                        AddGamePassProductsFromPackage(product, gameProductType, isPC, isConsole, childSubproductsList);
+                        AddGamePassProductsFromPackage(product, gameProductType, isPC, isConsole, childSubproductsList, progressArgs);
                     }
                     else
                     {
+                        if (progressArgs != null) progressArgs.CurrentProgressValue++;
                         continue;
                     }
                 }
 
-                AddGamePassGameFromProduct(gameProductType, isPC, isConsole, isChildProduct, parentProductId, product, childSubproductsList);
+                if (childSubproductsList.Count > 0)
+                {
+                    if (progressArgs != null) progressArgs.CurrentProgressValue++;
+                    continue;
+                }
+
+                AddGamePassGameFromProduct(gameProductType, isPC, isConsole, isChildProduct, parentProductId, product, childSubproductsList, progressArgs);
+                if (progressArgs != null) progressArgs.CurrentProgressValue++;
             }
         }
 
-        private void AddGamePassProductsFromPackage(CatalogProduct product, ProductType gameProductType, bool isPC, bool isConsole, List<string> childSubproductsList)
+        private void AddGamePassProductsFromPackage(CatalogProduct product, ProductType gameProductType, bool isPC, bool isConsole, List<string> childSubproductsList, GlobalProgressActionArgs progressArgs = null)
         {
             var marketProperties = product.MarketProperties.FirstOrDefault();
             if (marketProperties == null)
@@ -249,9 +271,11 @@ namespace GamePassCatalogBrowser.Services
             try
             {
                 var downloadResult = HttpRequestFactory.GetHttpRequest().WithUrl(catalogDataApiUrl).DownloadString();
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) return;
+                
                 if (downloadResult.IsSuccess)
                 {
-                    AddGamesFromCatalogData(JsonConvert.DeserializeObject<CatalogData>(downloadResult.Content), false, gameProductType, isPC, isConsole, true, product.ProductId);
+                    AddGamesFromCatalogData(JsonConvert.DeserializeObject<CatalogData>(downloadResult.Content), false, gameProductType, isPC, isConsole, true, product.ProductId, progressArgs);
                 }
                 else
                 {
@@ -264,9 +288,19 @@ namespace GamePassCatalogBrowser.Services
             }
         }
 
-        private void AddGamePassGameFromProduct(ProductType gameProductType, bool isPC, bool isConsole, bool isChildProduct, string parentProductId, CatalogProduct product, List<string> childSubproductsList)
+        private void AddGamePassGameFromProduct(ProductType gameProductType, bool isPC, bool isConsole, bool isChildProduct, string parentProductId, CatalogProduct product, List<string> childSubproductsList, GlobalProgressActionArgs progressArgs = null)
         {
+            if (progressArgs != null)
+            {
+                var title = product.LocalizedProperties[0].ProductTitle.TrimEnd('.', ' ', '\u2026');
+                if (title.Length > 35)
+                {
+                    title = title.Substring(0, 35).TrimEnd('.', ' ') + "...";
+                }
+                progressArgs.Text = $"Adding: {title}";
+            }
             var gamePassGame = GetGamePassGameFromProduct(gameProductType, isPC, isConsole, isChildProduct, parentProductId, product, childSubproductsList);
+            gamePassGame.TempIsFound = true;
             gamePassGamesList.Add(gamePassGame);
             DownloadGamePassGameCache(gamePassGame);
 
@@ -320,15 +354,12 @@ namespace GamePassCatalogBrowser.Services
                 IsConsole = isConsole
             };
 
-            if (product.Properties.PackageFamilyName.IsNullOrEmpty())
+            gamePassGame.GameId = product.Properties.PackageFamilyName;
+            if (gamePassGame.GameId.IsNullOrEmpty())
             {
-                gamePassGame.ProductType = ProductType.Collection;
+                gamePassGame.GameId = product.ProductId;
             }
-            else
-            {
-                gamePassGame.GameId = product.Properties.PackageFamilyName;
-                gamePassGame.ProductType = gameProductType;
-            }
+            gamePassGame.ProductType = gameProductType;
 
             if (product.LocalizedProperties[0].DeveloperName.IsNullOrEmpty())
             {
@@ -353,7 +384,7 @@ namespace GamePassCatalogBrowser.Services
             return gamePassGame;
         }
 
-        public List<GamePassGame> GetGamePassGamesList()
+        public List<GamePassGame> GetGamePassGamesList(GlobalProgressActionArgs progressArgs = null)
         {
             // Try to create cache directory in case it doesn't exist
             Directory.CreateDirectory(imageCachePath);
@@ -361,75 +392,132 @@ namespace GamePassCatalogBrowser.Services
             if (FileSystem.FileExists(gameDataCachePath))
             {
                 gamePassGamesList = JsonConvert.DeserializeObject<List<GamePassGame>>(File.ReadAllText(gameDataCachePath));
+                foreach (var game in gamePassGamesList)
+                {
+                    game.TempIsFound = false;
+                    game.HideConsolePlatform = !showConsoleGamesInBrowser;
+                }
             }
 
+            if (progressArgs != null) progressArgs.Text = "Downloading Game Pass PC catalog...";
             var gamePassCatalogDownload = GetGamepassCatalog(gamepassCatalogApiUrl);
+            if (progressArgs?.CancelToken.IsCancellationRequested == true) return SaveCacheAndReturn();
             if (gamePassCatalogDownload != null)
             {
-                ProcessGamePassCatalog(gamePassCatalogDownload, ProductType.Game, true, false);
+                ProcessGamePassCatalog(gamePassCatalogDownload, ProductType.Game, true, false, progressArgs);
             }
 
+            if (progressArgs != null) progressArgs.Text = "Downloading EA Play PC catalog...";
             var gamePassEaCatalogDownload = GetGamepassCatalog(gamepassEaCatalogApiUrl);
+            if (progressArgs?.CancelToken.IsCancellationRequested == true) return SaveCacheAndReturn();
             if (gamePassEaCatalogDownload != null)
             {
-                ProcessGamePassCatalog(gamePassEaCatalogDownload, ProductType.EaGame, true, false);
+                ProcessGamePassCatalog(gamePassEaCatalogDownload, ProductType.EaGame, true, false, progressArgs);
             }
 
             if (enableConsoleCatalog)
             {
+                if (progressArgs != null) progressArgs.Text = "Downloading Game Pass Console catalog...";
                 var gamePassConsoleCatalogDownload = GetGamepassCatalog(gamepassConsoleCatalogApiUrl);
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) return SaveCacheAndReturn();
                 if (gamePassConsoleCatalogDownload != null)
                 {
-                    ProcessGamePassCatalog(gamePassConsoleCatalogDownload, ProductType.Game, false, true);
+                    ProcessGamePassCatalog(gamePassConsoleCatalogDownload, ProductType.Game, false, true, progressArgs);
                 }
 
+                if (progressArgs != null) progressArgs.Text = "Downloading EA Play Console catalog...";
                 var gamePassEaConsoleCatalogDownload = GetGamepassCatalog(gamepassEaConsoleCatalogApiUrl);
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) return SaveCacheAndReturn();
                 if (gamePassEaConsoleCatalogDownload != null)
                 {
-                    ProcessGamePassCatalog(gamePassEaConsoleCatalogDownload, ProductType.EaGame, false, true);
+                    ProcessGamePassCatalog(gamePassEaConsoleCatalogDownload, ProductType.EaGame, false, true, progressArgs);
                 }
             }
+
+            CleanupRemovedGames();
             
+            gamePassGamesList = gamePassGamesList
+                .GroupBy(g => g.ProductId)
+                .Select(g => g.OrderBy(x => x.ProductType == ProductType.Game ? 0 : 1).First())
+                .GroupBy(g => g.Name.ToLower().Trim())
+                .Select(group =>
+                {
+                    var mergedGame = group.OrderBy(x => x.IsChildProduct ? 1 : 0) // Prefer standalone over bundle child
+                                          .ThenBy(x => x.IsPC ? 0 : 1)           // Prefer PC art over Console
+                                          .ThenBy(x => x.ProductType == ProductType.Game ? 0 : 1)
+                                          .First();
+                    mergedGame.IsPC = group.Any(x => x.IsPC);
+                    mergedGame.IsConsole = group.Any(x => x.IsConsole);
+                    return mergedGame;
+                })
+                .ToList();
+            return SaveCacheAndReturn();
+        }
+
+        private List<GamePassGame> SaveCacheAndReturn()
+        {
+            File.WriteAllText(gameDataCachePath, JsonConvert.SerializeObject(gamePassGamesList));
             return SetGamePassListFullPaths(gamePassGamesList);
         }
 
-        private void ProcessGamePassCatalog (List<GamePassCatalogProduct> gamePassCatalog, ProductType gameProductType, bool isPC, bool isConsole)
+        private void ProcessGamePassCatalog (List<GamePassCatalogProduct> gamePassCatalog, ProductType gameProductType, bool isPC, bool isConsole, GlobalProgressActionArgs progressArgs = null)
         {
+            if (progressArgs != null) progressArgs.Text = "Processing game updates and metadata...";
             var idsForDataRequest = new List<string>();
-            // Check for games removed from the service
-            var gamesRemoved = false;
-            foreach (var game in gamePassGamesList.ToList())
-            {
-                if (game.ProductType == ProductType.Game || game.ProductType == ProductType.Collection)
-                {
-                    if (gameProductType == ProductType.EaGame)
-                    {
-                        continue;
-                    }
-                }
-                else if (game.ProductType == ProductType.EaGame)
-                {
-                    if (gameProductType == ProductType.Game)
-                    {
-                        continue;
-                    }
-                }
 
-                var gameMatched = false;
-                if (game.IsChildProduct)
+            foreach (var catalogItem in gamePassCatalog)
+            {
+                var games = gamePassGamesList.Where(x => x.ProductId == catalogItem.Id || (x.IsChildProduct && x.ParentProductId == catalogItem.Id));
+                foreach (var game in games)
                 {
-                    gameMatched = gamePassCatalog.Any(x => x.Id == game.ParentProductId);
+                    game.TempIsFound = true;
+                    if (isPC) game.IsPC = true;
+                    if (isConsole) game.IsConsole = true;
+                }
+            }
+
+            foreach (GamePassCatalogProduct gamePassProduct in gamePassCatalog)
+            {
+                if (!gamePassGamesList.Any(x => x.ProductId.Equals(gamePassProduct.Id) || (x.IsChildProduct && x.ParentProductId == gamePassProduct.Id)))
+                {
+                    idsForDataRequest.Add(gamePassProduct.Id);
+                }
+            }
+
+            if (!idsForDataRequest.Any())
+            {
+                return;
+            }
+
+            var bigIdsParam = string.Join(",", idsForDataRequest);
+            var catalogDataApiUrl = string.Format(catalogDataApiBaseUrl, bigIdsParam, countryCode, languageCode);
+            try
+            {
+                var downloadResult = HttpRequestFactory.GetHttpRequest().WithUrl(catalogDataApiUrl).DownloadString();
+                if (progressArgs?.CancelToken.IsCancellationRequested == true) return;
+                
+                if (downloadResult.IsSuccess)
+                {
+                    AddGamesFromCatalogData(JsonConvert.DeserializeObject<CatalogData>(downloadResult.Content), true, gameProductType, isPC, isConsole, false, string.Empty, progressArgs);
                 }
                 else
                 {
-                    gameMatched = gamePassCatalog.Any(x => x.Id == game.ProductId);
+                    logger.Info($"Request {catalogDataApiUrl} not completed");
                 }
+            }
+            catch (Exception e)
+            {
+                logger.Error(e, $"Error in ApiRequest {catalogDataApiUrl}");
+            }
+        }
 
-                if (gameMatched)
-                {
-                    continue;
-                }
 
+
+        private void CleanupRemovedGames()
+        {
+            var gamesToRemove = gamePassGamesList.Where(g => !g.TempIsFound).ToList();
+            foreach (var game in gamesToRemove)
+            {
                 var gameFilesPaths = new List<string>()
                 {
                     Path.Combine(imageCachePath, game.BackgroundImage),
@@ -453,7 +541,6 @@ namespace GamePassCatalogBrowser.Services
                     gameRemoved = xboxLibraryHelper.RemoveGamePassGame(game);
                     if (gameRemoved)
                     {
-                        // Notify user that game has been removed from the library
                         playniteApi.Notifications.Add(new NotificationMessage(
                         Guid.NewGuid().ToString(),
                             $"{game.Name} has been removed from the Game Pass catalog and Playnite library",
@@ -469,7 +556,6 @@ namespace GamePassCatalogBrowser.Services
 
                 if (notifyCatalogUpdates && !gameRemoved)
                 {
-                    // Notify user that game has been removed
                     playniteApi.Notifications.Add(new NotificationMessage(
                     Guid.NewGuid().ToString(),
                         $"{game.Name} has been removed from the Game Pass catalog",
@@ -478,45 +564,6 @@ namespace GamePassCatalogBrowser.Services
                 }
 
                 gamePassGamesList.Remove(game);
-                gamesRemoved = true;
-            }
-
-            if (gamesRemoved)
-            {
-                File.WriteAllText(gameDataCachePath, JsonConvert.SerializeObject(gamePassGamesList));
-            }
-
-            foreach (GamePassCatalogProduct gamePassProduct in gamePassCatalog)
-            {
-                if (gamePassGamesList.Any(x => x.ProductId.Equals(gamePassProduct.Id)) == false)
-                {
-                    idsForDataRequest.Add(gamePassProduct.Id);
-                }
-            }
-
-            if (!idsForDataRequest.Any())
-            {
-                return;
-            }
-
-            var bigIdsParam = string.Join(",", idsForDataRequest);
-            var catalogDataApiUrl = string.Format(catalogDataApiBaseUrl, bigIdsParam, countryCode, languageCode);
-            try
-            {
-                var downloadResult = HttpRequestFactory.GetHttpRequest().WithUrl(catalogDataApiUrl).DownloadString();
-                if (downloadResult.IsSuccess)
-                {
-                    AddGamesFromCatalogData(JsonConvert.DeserializeObject<CatalogData>(downloadResult.Content), true, gameProductType, isPC, isConsole, false, string.Empty);
-                    File.WriteAllText(gameDataCachePath, JsonConvert.SerializeObject(gamePassGamesList));
-                }
-                else
-                {
-                    logger.Info($"Request {catalogDataApiUrl} not completed");
-                }
-            }
-            catch (Exception e)
-            {
-                logger.Error(e, $"Error in ApiRequest {catalogDataApiUrl}");
             }
         }
 

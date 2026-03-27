@@ -9,11 +9,19 @@
     <Grid>
         <Grid.Resources>
             <Style TargetType="TextBlock" BasedOn="{StaticResource BaseTextBlockStyle}" />
+            <Style x:Key="SubTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BaseTextBlockStyle}">
+                <Setter Property="Foreground" Value="Gray" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                        <Setter Property="Foreground" Value="#FF202020" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
         </Grid.Resources>
         <Grid Margin="20">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="700" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
@@ -21,33 +29,31 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <Grid>
+                <Grid HorizontalAlignment="Left" Margin="0,0,0,10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewCollectionLabel}" Grid.Column="0" Margin="0,0,0,0" VerticalAlignment="Center"/>
-                    <ComboBox Name="ComboBoxCollections" Grid.Column="1" ItemsSource="{Binding Collections}" IsSynchronizedWithCurrentItem="True"
-                          Margin="10,0,0,0"/>
-                    <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewCategoryLabel}" Margin="10,0,0,0" Grid.Column="2" VerticalAlignment="Center"/>
-                    <ComboBox Name="ComboBoxCategories" Grid.Column="3" ItemsSource="{Binding Categories}" IsSynchronizedWithCurrentItem="True"
-                          Margin="10,0,0,0"/>
-                    <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewSearchLabel}" Grid.Column="0" Grid.Row="1" VerticalAlignment="Center" Margin="0,10,0,0"/>
-                    <TextBox Margin="10,10,0,0" Text="{Binding SearchString, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}"
-                             Grid.Column="1" Grid.Row="1"/>
-                    <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" IsChecked="{Binding ShowGamesOnLibrary}"
-                              Content="Show games that are already in the Playnite library" Margin="0,10,0,0"/>
+                    <!-- Row 0: All controls in one compact row -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal">
+                        <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewCollectionLabel}" VerticalAlignment="Center"/>
+                        <ComboBox Name="ComboBoxCollections" ItemsSource="{Binding Collections}" IsSynchronizedWithCurrentItem="True"
+                                  Margin="8,0,0,0" MinWidth="140" MaxWidth="220"/>
+                                  
+                        <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewCategoryLabel}" Margin="20,0,0,0" VerticalAlignment="Center"/>
+                        <ComboBox Name="ComboBoxCategories" ItemsSource="{Binding Categories}" IsSynchronizedWithCurrentItem="True"
+                                  Margin="8,0,0,0" MinWidth="100" MaxWidth="180"/>
+                                  
+                        <TextBlock Text="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewSearchLabel}" VerticalAlignment="Center" Margin="20,0,0,0"/>
+                        <TextBox Text="{Binding SearchString, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=200}" 
+                                 Margin="8,0,0,0" Width="180" VerticalAlignment="Center"/>
+                                 
+                        <Button Content="↻ Refresh" Command="{Binding RefreshCommand}" Padding="8,2" Margin="20,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <CheckBox Grid.Row="1" IsChecked="{Binding ShowGamesOnLibrary}"
+                              Content="Show games that are already in the Playnite library" Margin="0,10,0,0" VerticalAlignment="Center"/>
                 </Grid>
-                <DockPanel Grid.Row="1" Margin="0,10,0,0">
-
-                </DockPanel>
                 <ListBox Grid.Row="2" Name="ListBoxGames" Margin="0,10,0,0" ItemsSource="{Binding GamePassGames}" SelectedItem="{Binding SelectedGamePassGame}" IsSynchronizedWithCurrentItem="True"
                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                         BorderThickness="0"
@@ -63,7 +69,7 @@
                                 <DockPanel>
                                     <StackPanel DockPanel.Dock="Bottom" Margin="0,3,0,0" Width="150" HorizontalAlignment="Left" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
-                                        <TextBlock Text="{Binding PlatformAndServiceLabel}" FontSize="10" Foreground="Gray" TextTrimming="CharacterEllipsis" Margin="0,1,0,3" ToolTip="{Binding PlatformAndServiceLabel}"/>
+                                        <TextBlock Text="{Binding PlatformAndServiceLabel}" FontSize="10" Style="{StaticResource SubTextStyle}" TextTrimming="CharacterEllipsis" Margin="0,1,0,3" ToolTip="{Binding PlatformAndServiceLabel}"/>
                                     </StackPanel>
                                     <Image Width="150" Height="225"
                                        Source="{Binding CoverImageLowRes, IsAsync=True, Converter={StaticResource ImageStringToImageConverter}}"
@@ -75,12 +81,12 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
             </Grid>
-            <Grid Grid.Column="1" Margin="10,0,0,0">
+            <Grid Grid.Column="1" Margin="10,20,0,0" Width="400">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding ElementName=ListBoxGames, Path=SelectedItem}" Value="{x:Null}" >
-                                <Setter Property="Visibility" Value="Hidden"/>
+                                <Setter Property="Visibility" Value="Collapsed"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
@@ -90,7 +96,17 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <StackPanel Grid.Row="0">
-                    <TextBlock FontSize="{DynamicResource FontSizeLargest}" TextWrapping="Wrap" Text="{Binding ElementName=ListBoxGames, Path=SelectedItem.Name}" VerticalAlignment="Center"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" FontSize="{DynamicResource FontSizeLargest}" TextWrapping="Wrap" 
+                                   Text="{Binding ElementName=ListBoxGames, Path=SelectedItem.Name}" VerticalAlignment="Center" 
+                                   Margin="0,0,80,0"/>
+                        <Button Grid.Column="1" Content="Close" VerticalAlignment="Top" 
+                                Command="{Binding ClearSelectionCommand}" Padding="10,2" />
+                    </Grid>
                     <Grid Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -111,15 +127,15 @@
                         <Label Grid.Row="2" Grid.Column="0" Name="OverviewCategoryLabel" Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewCategoryLabel}"/>
                         <Label Grid.Row="2" Grid.Column="1" Margin="10,0,0,0"
                                 Content="{Binding ElementName=ListBoxGames, Path=SelectedItem.Category}"/>
-                        <Label Grid.Row="3" Grid.Column="0" Name="OverviewAvailabilityLabel" Content="Availability"/>
+                        <Label Grid.Row="3" Grid.Column="0" Name="OverviewAvailabilityLabel" Content="Availability:"/>
                         <Label Grid.Row="3" Grid.Column="1" Margin="10,0,0,0"
                                 Content="{Binding ElementName=ListBoxGames, Path=SelectedItem.PlatformAndServiceLabel}"/>
                     </Grid>
-                    <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
-                        <Button Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewOpenInXboxApp}" Command="{Binding XboxAppViewCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5"/>
-                        <Button Margin="10,0,0,0" Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewOpenInStore}" Command="{Binding StoreViewCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5"/>
-                        <Button Margin="10,0,0,0" Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewAddToLibrary}" Command="{Binding AddGameToLibraryCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5"/>
-                    </StackPanel>
+                    <WrapPanel Orientation="Horizontal" Margin="0,20,0,0">
+                        <Button Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewOpenInXboxApp}" Command="{Binding XboxAppViewCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5" Margin="0,0,5,5"/>
+                        <Button Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewOpenInStore}" Command="{Binding StoreViewCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5" Margin="0,0,5,5"/>
+                        <Button Content="{DynamicResource LOCGamePass_Catalog_Browser_WindowViewAddToLibrary}" Command="{Binding AddGameToLibraryCommand}" CommandParameter="{Binding SelectedItem, ElementName=ListBoxGames}" DockPanel.Dock="Left" Padding="5" Margin="0,0,5,5"/>
+                    </WrapPanel>
                 </StackPanel>
 
                 <ScrollViewer  VerticalScrollBarVisibility="Auto" Margin="0,20,0,0" Grid.Row="1">

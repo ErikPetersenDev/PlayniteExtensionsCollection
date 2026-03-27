@@ -17,7 +17,7 @@ using PluginsCommon;
 
 namespace GamePassCatalogBrowser.ViewModels
 {
-    class CatalogBrowserViewModel
+    class CatalogBrowserViewModel : INotifyPropertyChanged
     {
         private IPlayniteAPI PlayniteApi;
         private ICollectionView _gamePassGamesView;
@@ -49,8 +49,27 @@ namespace GamePassCatalogBrowser.ViewModels
             set
             {
                 selectedGamePassGame = value;
+                NotifyPropertyChanged("SelectedGamePassGame");
                 AddButtonEnabled = GetAddButtonStatus(value);
             }
+        }
+
+        public event Action RefreshRequested;
+
+        public RelayCommand ClearSelectionCommand
+        {
+            get => new RelayCommand(() =>
+            {
+                SelectedGamePassGame = null;
+            });
+        }
+
+        public RelayCommand RefreshCommand
+        {
+            get => new RelayCommand(() =>
+            {
+                RefreshRequested?.Invoke();
+            });
         }
 
         public bool GetAddButtonStatus(GamePassGame game)
@@ -140,167 +159,164 @@ namespace GamePassCatalogBrowser.ViewModels
             }
         }
 
-        private void NotifyPropertyChanged(string v)
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void NotifyPropertyChanged(string name)
         {
-            //throw new NotImplementedException();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
 
         public CatalogBrowserViewModel(List<GamePassGame> list, IPlayniteAPI api, GamePassCatalogBrowserSettings pluginSettings)
         {
             PlayniteApi = api;
             settings = pluginSettings;
+            _collectionsFilterString = "All PC";
+            _categoriesFilterString = "All";
 
             xboxLibraryHelper = new XboxLibraryHelper(api);
 
-            IList<GamePassGame> gamePassGames = list;
-
-            _gamePassGamesView = CollectionViewSource.GetDefaultView(gamePassGames);
-
-            _gamePassGamesView.CurrentChanged += GamePassGameSelectionChanged;
-
-            void GamePassGameSelectionChanged(object sender, EventArgs e)
-            {
-                // Not implemented
-            }
-
+            _gamePassGamesView = CollectionViewSource.GetDefaultView(list);
+            _gamePassGamesView.CurrentChanged += (s, e) => { }; // Keep for consistency if needed
             _gamePassGamesView.Filter = GamePassGameFilter;
 
-
-            bool IsGameInGenre(GamePassGame game)
-            {
-                if (_categoriesFilterString == "All")
-                {
-                    return true;
-                }
-                else if (string.IsNullOrEmpty(game.Category))
-                {
-                    return false;
-                }
-                else if (game.Category == _categoriesFilterString)
-                {
-                    return true;
-                }
-
-                return false;
-            }
-
-            bool GameContainsString (GamePassGame game)
-            {
-                if (string.IsNullOrEmpty(_searchString))
-                {
-                    return IsGameInGenre(game);
-                }
-                else if (game.Name.ToLower().Contains(_searchString.ToLower()))
-                {
-                    return IsGameInGenre(game);
-                }
-                else
-                {
-                    return false;
-                }
-            }
-
-            bool GamePassGameFilter(object item)
-            {
-                GamePassGame game = item as GamePassGame;
-
-                if (_collectionsFilterString != "All Games")
-                {
-                    switch (_collectionsFilterString)
-                    {
-                        case "All PC":
-                            if (!game.IsPC) return false;
-                            break;
-                        case "All Console":
-                            if (!game.IsConsole) return false;
-                            break;
-                        case "PC: Xbox Game Pass":
-                            if (!game.IsPC || game.ProductType != ProductType.Game) return false;
-                            break;
-                        case "PC: EA Play":
-                            if (!game.IsPC || game.ProductType != ProductType.EaGame) return false;
-                            break;
-                        case "Console: Xbox Game Pass":
-                            if (!game.IsConsole || game.ProductType != ProductType.Game) return false;
-                            break;
-                        case "Console: EA Play":
-                            if (!game.IsConsole || game.ProductType != ProductType.EaGame) return false;
-                            break;
-                        case "Collections":
-                            if (game.ProductType != ProductType.Collection) return false;
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                
-                if (showGamesOnLibrary == false)
-                {
-                    if (xboxLibraryHelper.GameIdsInLibrary.Contains(game.GameId))
-                    {
-                        return false;
-                    }
-                    else
-                    {
-                        return GameContainsString(game);
-                    } 
-                }
-
-                return GameContainsString(game);
-            }
-
             IList<string> collections = GetCollectionsList();
-
             _collectionsView = CollectionViewSource.GetDefaultView(collections);
-
+            _collectionsView.MoveCurrentTo("All PC");
             _collectionsView.CurrentChanged += CollectionSelectionChanged;
 
-            void CollectionSelectionChanged(object sender, EventArgs e)
+            IList<string> categories = GetCategoriesList(list);
+            _categoriesView = CollectionViewSource.GetDefaultView(categories);
+            _categoriesView.CurrentChanged += CategoriesSelectionChanged;
+        }
+
+        private void CollectionSelectionChanged(object sender, EventArgs e)
+        {
+            if (Collections.CurrentItem != null)
             {
                 CollectionsFilterString = Collections.CurrentItem.ToString();
             }
+        }
 
-            List<string> GetCollectionsList()
-            {
-                return new List<string>()
-                {
-                    {"All Games"},
-                    {"All PC"},
-                    {"All Console"},
-                    {"PC: Xbox Game Pass"},
-                    {"PC: EA Play"},
-                    {"Console: Xbox Game Pass"},
-                    {"Console: EA Play"},
-                    {"Collections"}
-                };
-            }
-
-            IList<string> categories = GetCategoriesList(list);
-
-            _categoriesView = CollectionViewSource.GetDefaultView(categories);
-
-            _categoriesView.CurrentChanged += CategoriesSelectionChanged;
-
-            void CategoriesSelectionChanged(object sender, EventArgs e)
+        private void CategoriesSelectionChanged(object sender, EventArgs e)
+        {
+            if (Categories.CurrentItem != null)
             {
                 CategoriesFilterString = Categories.CurrentItem.ToString();
             }
+        }
 
-            List<string> GetCategoriesList(List<GamePassGame> collection)
+        private bool GamePassGameFilter(object item)
+        {
+            GamePassGame game = item as GamePassGame;
+            if (game == null) return false;
+
+            if (_collectionsFilterString != "All (PC and Console)")
             {
-                var categoriesList = new List<string>()
+                switch (_collectionsFilterString)
                 {
-                        {"All"}
-                };
-                var categoriesTempList = collection.Select(x => x.Category).
-                    Where(a => a != null).Distinct().
-                    OrderBy(c => c).ToList();
-                foreach (string category in categoriesTempList)
-                {
-                    categoriesList.Add(category);
+                    case "All PC":
+                        if (!game.IsPC) return false;
+                        break;
+                    case "All Console":
+                        if (!game.IsConsole) return false;
+                        break;
+                    case "PC: Xbox Game Pass":
+                        if (!game.IsPC || game.ProductType != ProductType.Game) return false;
+                        break;
+                    case "PC: EA Play":
+                        if (!game.IsPC || game.ProductType != ProductType.EaGame) return false;
+                        break;
+                    case "Console: Xbox Game Pass":
+                        if (!game.IsConsole || game.ProductType != ProductType.Game) return false;
+                        break;
+                    case "Console: EA Play":
+                        if (!game.IsConsole || game.ProductType != ProductType.EaGame) return false;
+                        break;
+                    case "Collections":
+                        if (game.ProductType != ProductType.Collection) return false;
+                        break;
                 }
-                return categoriesList;
             }
+
+            if (showGamesOnLibrary == false)
+            {
+                if (xboxLibraryHelper.GameIdsInLibrary.Contains(game.GameId))
+                {
+                    return false;
+                }
+            }
+
+            return GameContainsString(game);
+        }
+
+        private bool GameContainsString(GamePassGame game)
+        {
+            if (string.IsNullOrEmpty(_searchString))
+            {
+                return IsGameInGenre(game);
+            }
+            
+            if (game.Name.ToLower().Contains(_searchString.ToLower()))
+            {
+                return IsGameInGenre(game);
+            }
+            
+            return false;
+        }
+
+        private bool IsGameInGenre(GamePassGame game)
+        {
+            if (_categoriesFilterString == "All")
+            {
+                return true;
+            }
+            
+            if (string.IsNullOrEmpty(game.Category))
+            {
+                return false;
+            }
+            
+            return game.Category == _categoriesFilterString;
+        }
+
+        private List<string> GetCollectionsList()
+        {
+            var collections = new List<string>();
+            if (settings.ShowConsoleGamesInBrowser)
+            {
+                collections.Add("All (PC and Console)");
+            }
+            
+            collections.Add("All PC");
+
+            if (settings.ShowConsoleGamesInBrowser)
+            {
+                collections.Add("All Console");
+            }
+            
+            collections.Add("PC: Xbox Game Pass");
+            collections.Add("PC: EA Play");
+            
+            if (settings.ShowConsoleGamesInBrowser)
+            {
+                collections.Add("Console: Xbox Game Pass");
+                collections.Add("Console: EA Play");
+            }
+
+            collections.Add("Collections");
+            return collections;
+        }
+
+        private List<string> GetCategoriesList(List<GamePassGame> collection)
+        {
+            var categoriesList = new List<string> { "All" };
+            var categoriesTempList = collection.Select(x => x.Category)
+                .Where(a => a != null)
+                .Distinct()
+                .OrderBy(c => c)
+                .ToList();
+
+            categoriesList.AddRange(categoriesTempList);
+            return categoriesList;
         }
 
         public RelayCommand<GamePassGame> StoreViewCommand
@@ -347,6 +363,13 @@ namespace GamePassCatalogBrowser.ViewModels
                     Collections.Refresh();
                 }
             }, (gamePassGame) => AddButtonEnabled);
+        }
+
+        public void UpdateGamesList(List<GamePassGame> newList)
+        {
+            _gamePassGamesView = CollectionViewSource.GetDefaultView(newList);
+            _gamePassGamesView.Filter = GamePassGameFilter;
+            NotifyPropertyChanged("GamePassGames");
         }
     }
 }

@@ -25,6 +25,8 @@ namespace GamePassCatalogBrowser
         private static readonly ILogger logger = LogManager.GetLogger();
 
         private GamePassCatalogBrowserSettingsViewModel settings { get; set; }
+        private List<GamePassGame> cachedGamesList = null;
+        private CatalogBrowserView cachedView = null;
 
         public override Guid Id { get; } = Guid.Parse("50c85177-570f-4494-be16-99d6aa5b8a93");
 
@@ -59,15 +61,38 @@ namespace GamePassCatalogBrowser
                     FontFamily = new FontFamily(new Uri(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Resources", "XboxLogoFont.ttf")), "./#XboxLogoFont")
                 },
                 Opened = () => {
-                    var gamePassGamesList = UpdateGamePassCatalog(false);
-                    if (!gamePassGamesList.HasItems())
+                    if (cachedView != null && cachedGamesList != null)
                     {
+                        return cachedView;
+                    }
+
+                    cachedGamesList = UpdateGamePassCatalog(false);
+                    if (!cachedGamesList.HasItems())
+                    {
+                        cachedGamesList = null;
                         PlayniteApi.Dialogs.ShowMessage(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_CatalogGetFailErrorMessage"),
                             "Game Pass Catalog Browser");
                         return null;
                     }
 
-                    return new CatalogBrowserView { DataContext = new CatalogBrowserViewModel(gamePassGamesList, PlayniteApi, settings.Settings) };
+                    if (!settings.Settings.ShowConsoleGamesInBrowser)
+                    {
+                        cachedGamesList.RemoveAll(g => g.IsConsole && !g.IsPC);
+                    }
+
+                    var viewModel = new CatalogBrowserViewModel(cachedGamesList, PlayniteApi, settings.Settings);
+                    viewModel.RefreshRequested += () =>
+                    {
+                        cachedGamesList = UpdateGamePassCatalog(false);
+                        if (!settings.Settings.ShowConsoleGamesInBrowser)
+                        {
+                            cachedGamesList.RemoveAll(g => g.IsConsole && !g.IsPC);
+                        }
+                        cachedView = null;
+                        viewModel.UpdateGamesList(cachedGamesList);
+                    };
+                    cachedView = new CatalogBrowserView { DataContext = viewModel };
+                    return cachedView;
                 }
             };
         }
@@ -126,18 +151,22 @@ namespace GamePassCatalogBrowser
                 PlayniteApi.Dialogs.ActivateGlobalProgress((a) =>
                 {
                     var gamePassGamesList = new List<GamePassGame>();
-                    var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary);
-                    gamePassGamesList = service.GetGamePassGamesList();
+                    var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary, settings.Settings.ShowConsoleGamesInBrowser);
+                    gamePassGamesList = service.GetGamePassGamesList(a);
+                    if (a.CancelToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                     if (gamePassGamesList.Count == 0)
                     {
                         PlayniteApi.Dialogs.ShowMessage(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_CatalogGetFailErrorMessage"), "Game Pass Catalog Browser");
                     }
                     else
                     {
-                        var addedGames = service.xboxLibraryHelper.AddGamePassListToLibrary(gamePassGamesList);
+                        var addedGames = service.xboxLibraryHelper.AddGamePassListToLibrary(gamePassGamesList, a);
                         PlayniteApi.Dialogs.ShowMessage(string.Format(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_UpdatingCatalogProgressMessage"), addedGames.ToString()), "Game Pass Catalog Browser");
                     }
-                }, new GlobalProgressOptions(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_UpdatingCatalogAddGamesProgressMessage")));
+                }, new GlobalProgressOptions(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_UpdatingCatalogAddGamesProgressMessage"), true) { Cancelable = true });
             }
         }
 
@@ -146,20 +175,25 @@ namespace GamePassCatalogBrowser
             var gamePassGamesList = new List<GamePassGame>();
             PlayniteApi.Dialogs.ActivateGlobalProgress((a) =>
             {
-                var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary);
+                var service = new GamePassCatalogBrowserService(PlayniteApi, GetPluginUserDataPath(), settings.Settings.NotifyCatalogUpdates, settings.Settings.AddExpiredTagToGames, settings.Settings.AddNewGames, settings.Settings.RemoveExpiredGames, settings.Settings.RegionCode, settings.Settings.EnableConsoleCatalog, settings.Settings.SyncConsoleGamesToLibrary, settings.Settings.ShowConsoleGamesInBrowser);
                 if (resetCache == true)
                 {
                     service.DeleteCache();
                 }
-                gamePassGamesList = service.GetGamePassGamesList();
-            }, new GlobalProgressOptions(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_UpdatingCatalogProgressMessage")));
+                gamePassGamesList = service.GetGamePassGamesList(a);
+            }, new GlobalProgressOptions(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_UpdatingCatalogProgressMessage"), true) { Cancelable = true });
 
             return gamePassGamesList;
         }
 
         public void InvokeViewWindow()
         {
-            var gamePassGamesList = UpdateGamePassCatalog(false);
+            if (cachedGamesList == null)
+            {
+                cachedGamesList = UpdateGamePassCatalog(false);
+            }
+
+            var gamePassGamesList = cachedGamesList;
 
             if (gamePassGamesList.Count == 0)
             {
