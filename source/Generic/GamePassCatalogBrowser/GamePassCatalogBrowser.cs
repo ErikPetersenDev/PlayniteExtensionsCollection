@@ -67,7 +67,7 @@ namespace GamePassCatalogBrowser
                         return null;
                     }
 
-                    return new CatalogBrowserView { DataContext = new CatalogBrowserViewModel(gamePassGamesList, PlayniteApi) };
+                    return new CatalogBrowserView { DataContext = new CatalogBrowserViewModel(gamePassGamesList, PlayniteApi, settings.Settings) };
                 }
             };
         }
