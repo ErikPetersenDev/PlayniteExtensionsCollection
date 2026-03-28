@@ -45,6 +45,7 @@ namespace GamePassCatalogBrowser.Services
         public void DeleteCache()
         {
             FileSystem.ClearDirectory(cachePath);
+            FileSystem.ClearDirectory(imageCachePath);
         }
 
         public GamePassCatalogBrowserService(IPlayniteAPI api, string dataPath, bool _notifyCatalogUpdates, bool _addExpiredTagToGames, bool _addNewGames, bool _removeExpiredGames, string _countryCode, bool _enableConsoleCatalog = false, bool _syncConsoleGames = false, bool _showConsoleGamesInBrowser = true, string _languageCode = "en-us")
@@ -69,6 +70,11 @@ namespace GamePassCatalogBrowser.Services
             gamepassEaConsoleCatalogApiUrl = string.Format(gamepassEaConsoleCatalogApiBaseUrl, languageCode, countryCode);
 
             xboxLibraryHelper = new XboxLibraryHelper(api, _syncConsoleGames);
+
+            if (!FileSystem.DirectoryExists(imageCachePath))
+            {
+                FileSystem.CreateDirectory(imageCachePath);
+            }
         }
 
         public List<GamePassCatalogProduct> GetGamepassCatalog(string catalogUrl)
@@ -304,22 +310,8 @@ namespace GamePassCatalogBrowser.Services
             gamePassGamesList.Add(gamePassGame);
             DownloadGamePassGameCache(gamePassGame);
 
-            var gameAdded = false;
-            if (addNewGames && gamePassGame.ProductType == ProductType.Game)
-            {
-                xboxLibraryHelper.AddGameToLibrary(gamePassGame, false);
-                if (gameAdded)
-                {
-                    playniteApi.Notifications.Add(new NotificationMessage(
-                        Guid.NewGuid().ToString(),
-                        $"{gamePassGame.Name} has been added to the Game Pass catalog and Playnite library",
-                        NotificationType.Info,
-                        () => ProcessStarter.StartUrl($"msxbox://game/?productId={product.ProductId}")));
-                }
-            }
-
-            // Notify user that game has been added
-            if (notifyCatalogUpdates && !gameAdded)
+            // Notify user that game has been added to the catalog
+            if (notifyCatalogUpdates)
             {
                 playniteApi.Notifications.Add(new NotificationMessage(
                     Guid.NewGuid().ToString(),
@@ -335,13 +327,13 @@ namespace GamePassCatalogBrowser.Services
         {
             var gamePassGame = new GamePassGame
             {
-                BackgroundImage = string.Format("{0}.jpg", Guid.NewGuid().ToString()),
+                BackgroundImage = $"{product.ProductId}_background.jpg",
                 BackgroundImageUrl = string.Format("https:{0}", product.LocalizedProperties[0].Images.Where(x => x.ImagePurpose == ImagePurpose.SuperHeroArt)?.FirstOrDefault()?.Uri),
                 Category = product.Properties.Category,
                 Categories = product.Properties.Categories,
-                CoverImage = string.Format("{0}.jpg", Guid.NewGuid().ToString()),
+                CoverImage = $"{product.ProductId}_cover.jpg",
                 CoverImageUrl = string.Format("https:{0}", product.LocalizedProperties[0].Images.Where(x => x.ImagePurpose == ImagePurpose.Poster)?.FirstOrDefault()?.Uri),
-                CoverImageLowRes = string.Format("{0}.jpg", Guid.NewGuid().ToString()),
+                CoverImageLowRes = $"{product.ProductId}_cover_low.jpg",
                 Description = product.LocalizedProperties[0].ProductDescription,
                 Name = NormalizeGameName(product.LocalizedProperties[0].ProductTitle),
                 ProductId = product.ProductId,
@@ -372,12 +364,12 @@ namespace GamePassCatalogBrowser.Services
 
             if (product.LocalizedProperties[0].Images.Any(x => x.ImagePurpose == ImagePurpose.BoxArt) == true)
             {
-                gamePassGame.Icon = string.Format("{0}.jpg", Guid.NewGuid().ToString());
+                gamePassGame.Icon = $"{product.ProductId}_icon.jpg";
                 gamePassGame.IconUrl = string.Format("https:{0}", product.LocalizedProperties[0].Images.Where(x => x.ImagePurpose == ImagePurpose.BoxArt)?.FirstOrDefault()?.Uri);
             }
             else if (product.LocalizedProperties[0].Images.Any(x => x.ImagePurpose == ImagePurpose.Logo) == true)
             {
-                gamePassGame.Icon = string.Format("{0}.jpg", Guid.NewGuid().ToString());
+                gamePassGame.Icon = $"{product.ProductId}_icon.jpg";
                 gamePassGame.IconUrl = string.Format("https:{0}", product.LocalizedProperties[0].Images.Where(x => x.ImagePurpose == ImagePurpose.Logo)?.FirstOrDefault()?.Uri);
             }
 
@@ -451,6 +443,7 @@ namespace GamePassCatalogBrowser.Services
                     return mergedGame;
                 })
                 .ToList();
+
             return SaveCacheAndReturn();
         }
 
@@ -467,7 +460,7 @@ namespace GamePassCatalogBrowser.Services
 
             foreach (var catalogItem in gamePassCatalog)
             {
-                var games = gamePassGamesList.Where(x => x.ProductId == catalogItem.Id || (x.IsChildProduct && x.ParentProductId == catalogItem.Id));
+                var games = gamePassGamesList.Where(x => x.ProductId == catalogItem.Id || (x.IsChildProduct && x.ParentProductId == catalogItem.Id)).ToList();
                 foreach (var game in games)
                 {
                     game.TempIsFound = true;
@@ -570,24 +563,45 @@ namespace GamePassCatalogBrowser.Services
         public void DownloadGamePassGameCache(GamePassGame game)
         {
             game.CoverImageLowRes = Path.Combine(imageCachePath, game.CoverImageLowRes);
-            HttpRequestFactory.GetHttpFileRequest()
-                .WithUrl(string.Format("{0}?mode=scale&q=90&h=300&w=200", game.CoverImageUrl))
-                .WithDownloadTo(game.CoverImageLowRes)
-                .DownloadFile();
-            
+            if (!FileSystem.FileExists(game.CoverImageLowRes))
+            {
+                HttpRequestFactory.GetHttpFileRequest()
+                    .WithUrl(string.Format("{0}?mode=scale&q=90&h=300&w=200", game.CoverImageUrl))
+                    .WithDownloadTo(game.CoverImageLowRes)
+                    .DownloadFile();
+            }
+
             game.CoverImage = Path.Combine(imageCachePath, game.CoverImage);
-            HttpRequestFactory.GetHttpFileRequest()
-                .WithUrl(string.Format("{0}?mode=scale&q=90&h=900&w=600", game.CoverImageUrl))
-                .WithDownloadTo(game.CoverImage)
-                .DownloadFile();
+            if (!FileSystem.FileExists(game.CoverImage))
+            {
+                HttpRequestFactory.GetHttpFileRequest()
+                    .WithUrl(string.Format("{0}?mode=scale&q=90&h=900&w=600", game.CoverImageUrl))
+                    .WithDownloadTo(game.CoverImage)
+                    .DownloadFile();
+            }
 
             if (game.Icon != null)
             {
                 game.Icon = Path.Combine(imageCachePath, game.Icon);
-                HttpRequestFactory.GetHttpFileRequest()
-                    .WithUrl(string.Format("{0}?mode=scale&q=90&h=128&w=128", game.IconUrl))
-                    .WithDownloadTo(game.Icon)
-                    .DownloadFile();
+                if (!FileSystem.FileExists(game.Icon))
+                {
+                    HttpRequestFactory.GetHttpFileRequest()
+                        .WithUrl(string.Format("{0}?mode=scale&q=90&h=128&w=128", game.IconUrl))
+                        .WithDownloadTo(game.Icon)
+                        .DownloadFile();
+                }
+            }
+
+            if (!string.IsNullOrEmpty(game.BackgroundImageUrl))
+            {
+                game.BackgroundImage = Path.Combine(imageCachePath, string.Format("{0}_background.jpg", game.ProductId));
+                if (!FileSystem.FileExists(game.BackgroundImage))
+                {
+                    HttpRequestFactory.GetHttpFileRequest()
+                        .WithUrl($"{game.BackgroundImageUrl}?mode=scale&q=90&h=1080&w=1920")
+                        .WithDownloadTo(game.BackgroundImage)
+                        .DownloadFile();
+                }
             }
         }
 
@@ -599,19 +613,27 @@ namespace GamePassCatalogBrowser.Services
             {
                 game.Icon = Path.GetFileName(game.Icon);
             }
+            if (!string.IsNullOrEmpty(game.BackgroundImage))
+            {
+                game.BackgroundImage = Path.GetFileName(game.BackgroundImage);
+            }
 
             return game;
         }
 
         public List<GamePassGame> SetGamePassListFullPaths(List<GamePassGame> cacheGamesList)
         {
-            foreach (GamePassGame game in cacheGamesList)
+            foreach (GamePassGame game in cacheGamesList.ToList())
             {
-                game.CoverImageLowRes = Path.Combine(imageCachePath, game.CoverImageLowRes);
-                game.CoverImage = Path.Combine(imageCachePath, game.CoverImage);
+                game.CoverImageLowRes = Path.Combine(imageCachePath, Path.GetFileName(game.CoverImageLowRes));
+                game.CoverImage = Path.Combine(imageCachePath, Path.GetFileName(game.CoverImage));
                 if (game.Icon != null)
                 {
-                    game.Icon = Path.Combine(imageCachePath, game.Icon);
+                    game.Icon = Path.Combine(imageCachePath, Path.GetFileName(game.Icon));
+                }
+                if (!string.IsNullOrEmpty(game.BackgroundImage))
+                {
+                    game.BackgroundImage = Path.Combine(imageCachePath, Path.GetFileName(game.BackgroundImage));
                 }
             }
 

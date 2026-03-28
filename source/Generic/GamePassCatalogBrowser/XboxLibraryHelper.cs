@@ -13,7 +13,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Globalization;
+using Newtonsoft.Json;
 
 namespace GamePassCatalogBrowser
 {
@@ -58,78 +60,49 @@ namespace GamePassCatalogBrowser
 
         public void RefreshLibraryItems()
         {
-            LibraryGames = PlayniteApi.Database.Games.
-                Where(g => g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId);
+            var newGameIdsInLibrary = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var newLibraryGames = PlayniteApi.Database.Games.ToList()
+                .Where(g => g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId)
+                .ToList();
 
-            var gamesOnLibrary = new HashSet<string>();
-            foreach (Game game in LibraryGames)
+            foreach (var game in newLibraryGames)
             {
-                gamesOnLibrary.Add(game.GameId);
+                if (!string.IsNullOrEmpty(game.GameId))
+                {
+                    newGameIdsInLibrary.Add(game.GameId);
+                }
             }
 
-            GameIdsInLibrary = gamesOnLibrary;
+            LibraryGames = newLibraryGames;
+            GameIdsInLibrary = newGameIdsInLibrary;
         }
 
-        private List<Guid> arrayToCompanyGuids(List<string> array)
-        {
-            var list = new List<Guid>();
-            foreach (var str in array)
-            {
-                var company = PlayniteApi.Database.Companies.Add(str);
-                list.Add(company.Id);
-            }
-
-            return list;
-        }
-
-        public static string GetNormalizedName(string name)
+        private string GetNormalizedName(string name)
         {
             if (string.IsNullOrEmpty(name)) return string.Empty;
-            var normalized = name.ToLowerInvariant();
-            normalized = normalized.Replace("™", "").Replace("®", "").Replace("©", "");
-            normalized = Regex.Replace(normalized, @"\s+", " "); // Replace multiple spaces with single space
-            return normalized.Trim();
-        }
-
-        private static string StringToHtml(string s, bool nofollow)
-        {
-            s = WebUtility.HtmlEncode(s);
-            string[] paragraphs = s.Split(new string[] { "\r\n\r\n" }, StringSplitOptions.None);
-            StringBuilder sb = new StringBuilder();
-            foreach (string par in paragraphs)
-            {
-                sb.AppendLine("<p>");
-                string p = par.Replace(Environment.NewLine, "<br />\r\n");
-                if (nofollow)
-                {
-                    p = Regex.Replace(p, @"\[\[(.+)\]\[(.+)\]\]", "<a href=\"$2\" rel=\"nofollow\">$1</a>");
-                    p = Regex.Replace(p, @"\[\[(.+)\]\]", "<a href=\"$1\" rel=\"nofollow\">$1</a>");
-                }
-                else
-                {
-                    p = Regex.Replace(p, @"\[\[(.+)\]\[(.+)\]\]", "<a href=\"$2\">$1</a>");
-                    p = Regex.Replace(p, @"\[\[(.+)\]\]", "<a href=\"$1\">$1</a>");
-                }
-                sb.AppendLine(p);
-                sb.AppendLine("</p>");
-            }
-            return sb.ToString();
+            var lower = name.ToLowerInvariant();
+            lower = Regex.Replace(lower, @"[^a-z0-9]", "");
+            return lower;
         }
 
         public Game GetLibraryGameFromGamePassGame(GamePassGame gamePassGame)
         {
-            return PlayniteApi.Database.Games
-                .FirstOrDefault(g => g.PluginId.Equals(pluginId) &&
-                g.GameId.Equals(gamePassGame.GameId) &&
-                g.SourceId != null &&
-                g.SourceId.Equals(sourceId));
+            return LibraryGames?.FirstOrDefault(g => (g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId) &&
+                g.GameId.Equals(gamePassGame.GameId));
         }
 
         public Game GetLibraryGameFromGamePassGameAnySource(GamePassGame gamePassGame)
         {
-            return PlayniteApi.Database.Games
+            // Use the snapshot if available, otherwise hit the database but with ToList() to avoid concurrent modification issues
+            if (LibraryGames != null)
+            {
+                return LibraryGames.FirstOrDefault(g => (g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId) &&
+                    g.GameId.Equals(gamePassGame.GameId, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return PlayniteApi.Database.Games.ToList()
                 .FirstOrDefault(g => (g.PluginId == pluginId || g.PluginId == xboxLibraryPluginId) &&
-                g.GameId.Equals(gamePassGame.GameId));
+                g.GameId.Equals(gamePassGame.GameId, StringComparison.OrdinalIgnoreCase));
         }
 
         public bool RemoveGamePassGame(GamePassGame gamePassGame)
@@ -175,129 +148,252 @@ namespace GamePassCatalogBrowser
             }
         }
 
-        public int AddGamePassListToLibrary (List<GamePassGame> gamePassGamesList, GlobalProgressActionArgs progressArgs = null)
+        public int AddGamePassListToLibrary(List<GamePassGame> gamePassGamesList, GlobalProgressActionArgs progressArgs = null)
         {
-            var i = 0;
+            var addedCount = 0;
             if (progressArgs != null)
             {
                 progressArgs.CurrentProgressValue = 0;
                 progressArgs.ProgressMaxValue = gamePassGamesList.Count;
-                progressArgs.Text = "Processing Game Pass catalog updates...";
+                progressArgs.Text = "Scanning Game Pass catalog...";
             }
 
-            // Create a fast-lookup dictionary for normalized names to avoid repeated expensive regex/replace calls
+            // Local lists for batch commitment
+            var newGamesToAdd = new List<Tuple<Game, GamePassGame>>();
+            var updatesToCommit = new List<Tuple<Game, List<Guid>, List<Guid>>>(); // Game, List of Tags, List of Platforms
+            var currentSyncAddedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 1. Pre-resolve all developers and publishers
+            var allCompanyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var game in gamePassGamesList)
+            {
+                if (game.Developers != null) foreach (var dev in game.Developers) if (!string.IsNullOrEmpty(dev)) allCompanyNames.Add(dev);
+                if (game.Publishers != null) foreach (var pub in game.Publishers) if (!string.IsNullOrEmpty(pub)) allCompanyNames.Add(pub);
+            }
+
+            PlayniteApi.MainView.UIDispatcher.Invoke(new Action(() =>
+            {
+                using (PlayniteApi.Database.BufferedUpdate())
+                {
+                    foreach (var companyName in allCompanyNames)
+                    {
+                        PlayniteApi.Database.Companies.Add(companyName);
+                    }
+                }
+            }));
+
+            // 2. Scan and Prepare Changes (Background Thread)
             var libraryNormalizedNames = new Dictionary<string, Game>();
-            foreach (var libGame in LibraryGames)
+            if (LibraryGames != null)
             {
-                var norm = GetNormalizedName(libGame.Name);
-                if (!string.IsNullOrEmpty(norm) && !libraryNormalizedNames.ContainsKey(norm))
+                foreach (var libGame in LibraryGames)
                 {
-                    libraryNormalizedNames[norm] = libGame;
+                    var norm = GetNormalizedName(libGame.Name);
+                    if (!string.IsNullOrEmpty(norm) && !libraryNormalizedNames.ContainsKey(norm))
+                    {
+                        libraryNormalizedNames[norm] = libGame;
+                    }
                 }
             }
 
-            using (PlayniteApi.Database.BufferedUpdate())
-            foreach (GamePassGame game in gamePassGamesList.ToList())
+            foreach (GamePassGame game in gamePassGamesList)
             {
-                if (progressArgs?.CancelToken.IsCancellationRequested == true) break;
-                if (progressArgs != null)
+                try
                 {
-                    progressArgs.CurrentProgressValue++;
-                }
-                if (!syncConsoleGames && game.IsConsole && !game.IsPC)
-                {
-                    continue;
-                }
+                    if (progressArgs?.CancelToken.IsCancellationRequested == true) break;
+                    if (progressArgs != null) progressArgs.CurrentProgressValue++;
 
-                var existingGame = LibraryGames.FirstOrDefault(g => g.GameId.Equals(game.GameId));
-                if (existingGame == null)
-                {
-                    var normalizedCatalogName = GetNormalizedName(game.Name);
-                    if (!string.IsNullOrEmpty(normalizedCatalogName) && libraryNormalizedNames.TryGetValue(normalizedCatalogName, out var match))
-                    {
-                        existingGame = match;
-                    }
-                }
+                    if (!syncConsoleGames && game.IsConsole && !game.IsPC) continue;
+                    if (GameIdsInLibrary != null && GameIdsInLibrary.Contains(game.GameId)) continue;
+                    if (currentSyncAddedIds.Contains(game.GameId)) continue;
 
-                if (existingGame == null)
-                {
-                    if (progressArgs != null) progressArgs.Text = $"Adding: {game.Name}";
-                    var success = AddGameToLibrary(game, false);
-                    if (success == true)
+                    var existingGame = LibraryGames?.FirstOrDefault(g => g.GameId.Equals(game.GameId, StringComparison.OrdinalIgnoreCase));
+                    if (existingGame == null)
                     {
-                        i++;
-                    }
-                }
-                else if (existingGame.PluginId == pluginId)
-                {
-                    var resultSaved = false;
-                    if (game.IsPC && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedTag)) resultSaved = true;
-                    if (game.IsConsole && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, gameAddedConsoleTag)) resultSaved = true;
-
-                    // Let's also enforce platforms if they were already in the library but lacked console platforms
-                    if (game.IsConsole)
-                    {
-                        foreach (var platformId in consolePlatformsList)
+                        var normalizedCatalogName = GetNormalizedName(game.Name);
+                        if (!string.IsNullOrEmpty(normalizedCatalogName) && libraryNormalizedNames.TryGetValue(normalizedCatalogName, out var match))
                         {
-                            if (!existingGame.PlatformIds.Contains(platformId))
-                            {
-                                existingGame.PlatformIds.Add(platformId);
-                                resultSaved = true;
-                            }
-                        }
-                        if (PlayniteUtilities.AddFeatureToGame(PlayniteApi, existingGame, "Xbox Series X|S")) resultSaved = true;
-                    }
-
-                    if (game.IsPC)
-                    {
-                        foreach (var platformId in platformsList)
-                        {
-                            if (!existingGame.PlatformIds.Contains(platformId))
-                            {
-                                existingGame.PlatformIds.Add(platformId);
-                                resultSaved = true;
-                            }
+                            existingGame = match;
                         }
                     }
 
-                    if (resultSaved)
+                    if (existingGame == null)
                     {
-                        PlayniteApi.Database.Games.Update(existingGame);
+                        if (progressArgs != null) progressArgs.Text = "Scanning catalog and identifying updates...";
+                        
+                        var newTags = new List<Guid>();
+                        if (game.IsPC) newTags.Add(gameAddedTag.Id);
+                        if (game.IsConsole) newTags.Add(gameAddedConsoleTag.Id);
+
+                        var newPlatforms = new List<Guid>();
+                        if (game.IsPC) newPlatforms.AddRange(platformsList);
+                        if (game.IsConsole) newPlatforms.AddRange(consolePlatformsList);
+
+                        var newGame = new Game
+                        {
+                            Name = game.Name,
+                            GameId = game.GameId,
+                            DeveloperIds = arrayToCompanyGuids(game.Developers),
+                            PublisherIds = arrayToCompanyGuids(game.Publishers),
+                            TagIds = newTags,
+                            PluginId = pluginId,
+                            PlatformIds = newPlatforms,
+                            Description = StringToHtml(game.Description, true),
+                            SourceId = sourceId,
+                            CompletionStatusId = PlayniteApi.ApplicationSettings.CompletionStatus.DefaultStatus
+                        };
+
+                        if (game.ReleaseDate.Year != 2799)
+                        {
+                            newGame.ReleaseDate = new ReleaseDate(game.ReleaseDate);
+                        }
+
+                        newGamesToAdd.Add(new Tuple<Game, GamePassGame>(newGame, game));
+                        currentSyncAddedIds.Add(game.GameId);
+                    }
+                    else if (existingGame.PluginId == pluginId)
+                    {
+                        var targetPlatforms = new List<Guid>();
+                        if (game.IsPC) targetPlatforms.AddRange(platformsList);
+                        if (game.IsConsole) targetPlatforms.AddRange(consolePlatformsList);
+
+                        var targetTags = new List<Guid>();
+                        if (game.IsPC) targetTags.Add(gameAddedTag.Id);
+                        if (game.IsConsole) targetTags.Add(gameAddedConsoleTag.Id);
+
+                        updatesToCommit.Add(new Tuple<Game, List<Guid>, List<Guid>>(existingGame, targetTags, targetPlatforms));
                     }
                 }
-                else
+                catch (Exception ex)
                 {
-                    // Match found in official Xbox Library - skip silently as requested
+                    logger.Error(ex, $"Error preparing {game.Name} for library update");
                 }
             }
 
-            RefreshLibraryItems();
+            // 3. One-Shot Commit (UI Thread)
+            if (progressArgs != null)
+            {
+                progressArgs.Text = "Adding games to library (this may take a moment)...";
+                // Give UI thread a moment to catch the message change before we block it
+                Thread.Sleep(100);
+            }
 
-            return i;
+            PlayniteApi.MainView.UIDispatcher.Invoke(new Action(() =>
+            {
+                using (PlayniteApi.Database.BufferedUpdate())
+                {
+                    foreach (var entry in newGamesToAdd)
+                    {
+                        var newGame = entry.Item1;
+                        var source = entry.Item2;
+                        
+                        PlayniteApi.Database.Games.Add(newGame);
+
+                        // Handle files while we have the ID
+                        if (FileSystem.FileExists(source.CoverImage))
+                        {
+                            newGame.CoverImage = PlayniteApi.Database.AddFile(source.CoverImage, newGame.Id);
+                        }
+                        if (FileSystem.FileExists(source.Icon))
+                        {
+                            newGame.Icon = PlayniteApi.Database.AddFile(source.Icon, newGame.Id);
+                        }
+                        if (FileSystem.FileExists(source.BackgroundImage))
+                        {
+                            newGame.BackgroundImage = PlayniteApi.Database.AddFile(source.BackgroundImage, newGame.Id);
+                        }
+                        else if (!source.BackgroundImageUrl.IsNullOrEmpty())
+                        {
+                            var fileName = string.Format("{0}_background.jpg", source.ProductId);
+                            var downloadPath = Path.Combine(PlayniteApi.Database.GetFileStoragePath(newGame.Id), fileName);
+                            if (FileSystem.FileExists(downloadPath))
+                            {
+                                newGame.BackgroundImage = string.Format("{0}/{1}", newGame.Id.ToString(), fileName);
+                            }
+                        }
+
+                        PlayniteApi.Database.Games.Update(newGame);
+                        addedCount++;
+                    }
+
+                    foreach (var update in updatesToCommit)
+                    {
+                        var game = update.Item1;
+                        var tags = update.Item2;
+                        var plts = update.Item3;
+                        var changed = false;
+
+                        foreach (var tagId in tags)
+                        {
+                            var tag = PlayniteApi.Database.Tags.Get(tagId);
+                            if (tag != null && PlayniteUtilities.AddTagToGame(PlayniteApi, game, tag)) changed = true;
+                        }
+
+                        var currentPlatforms = game.PlatformIds != null ? new List<Guid>(game.PlatformIds) : new List<Guid>();
+                        foreach (var platId in plts)
+                        {
+                            if (!currentPlatforms.Contains(platId))
+                            {
+                                currentPlatforms.Add(platId);
+                                changed = true;
+                            }
+                        }
+                        if (changed)
+                        {
+                            game.PlatformIds = currentPlatforms;
+                            PlayniteApi.Database.Games.Update(game);
+                        }
+                    }
+                }
+            }));
+
+            PlayniteApi.MainView.UIDispatcher.Invoke(new Action(() =>
+            {
+                RefreshLibraryItems();
+            }));
+            
+            return addedCount;
         }
 
-        public bool AddGameToLibrary(GamePassGame game, bool showGameAddDialog)
+        private List<Guid> arrayToCompanyGuids(List<string> array)
         {
-            if (game == null)
+            var companyGuids = new List<Guid>();
+            if (array == null)
             {
-                return false;
+                return companyGuids;
             }
 
-            if (string.IsNullOrEmpty(game.GameId))
+            foreach (var str in array)
             {
-                return false;
+                var company = PlayniteApi.Database.Companies.Add(str);
+                companyGuids.Add(company.Id);
             }
 
-            if (game.ProductType != ProductType.Game && game.ProductType != ProductType.EaGame)
+            return companyGuids;
+        }
+
+        private string StringToHtml(string str, bool replaceLineEnds)
+        {
+            if (string.IsNullOrEmpty(str))
             {
-                return false;
+                return string.Empty;
             }
 
-            var existingGame = GetLibraryGameFromGamePassGameAnySource(game);
-            if (existingGame != null)
+            if (replaceLineEnds)
             {
-                return false;
+                return str.Replace("\r\n", "<br>").Replace("\n", "<br>");
             }
+
+            return str;
+        }
+
+        public bool AddGameToLibrary(GamePassGame game, bool showGameAddDialog, Game existingGameCheck = null)
+        {
+            if (game == null || string.IsNullOrEmpty(game.GameId)) return false;
+            if (game.ProductType != ProductType.Game && game.ProductType != ProductType.EaGame) return false;
+
+            var existingGame = existingGameCheck ?? GetLibraryGameFromGamePassGameAnySource(game);
+            if (existingGame != null) return false;
 
             var newTags = new List<Guid>();
             if (game.IsPC) newTags.Add(gameAddedTag.Id);
@@ -321,40 +417,23 @@ namespace GamePassCatalogBrowser
                 CompletionStatusId = PlayniteApi.ApplicationSettings.CompletionStatus.DefaultStatus
             };
 
-            // #71 Certain games have incorrect dates in their release date,
-            // having in common the year 2799
-            if (game.ReleaseDate.Year != 2799)
-            {
-                newGame.ReleaseDate = new ReleaseDate(game.ReleaseDate);
-            }
+            if (game.ReleaseDate.Year != 2799) newGame.ReleaseDate = new ReleaseDate(game.ReleaseDate);
 
-            PlayniteApi.Database.Games.Add(newGame);
-            if (FileSystem.FileExists(game.CoverImage))
+            PlayniteApi.MainView.UIDispatcher.Invoke(new Action(() =>
             {
-                newGame.CoverImage = PlayniteApi.Database.AddFile(game.CoverImage, newGame.Id);
-            }
-
-            if (FileSystem.FileExists(game.Icon))
-            {
-                newGame.Icon = PlayniteApi.Database.AddFile(game.Icon, newGame.Id);
-            }
-
-            if (!game.BackgroundImageUrl.IsNullOrEmpty())
-            {
-                var fileName = string.Format("{0}.jpg", Guid.NewGuid().ToString());
-                var downloadPath = Path.Combine(PlayniteApi.Database.GetFileStoragePath(newGame.Id), fileName);
-                HttpRequestFactory.GetHttpFileRequest()
-                    .WithUrl($"{game.BackgroundImageUrl}?mode=scale&q=90&h=1080&w=1920")
-                    .WithDownloadTo(downloadPath)
-                    .DownloadFile();
-                if (FileSystem.FileExists(downloadPath))
+                using (PlayniteApi.Database.BufferedUpdate())
                 {
-                    newGame.BackgroundImage = string.Format("{0}/{1}", newGame.Id.ToString(), fileName);
-                }
-            }
+                    PlayniteApi.Database.Games.Add(newGame);
 
-            PlayniteApi.Database.Games.Update(newGame);
-            GameIdsInLibrary.Add(game.GameId);
+                    if (FileSystem.FileExists(game.CoverImage)) newGame.CoverImage = PlayniteApi.Database.AddFile(game.CoverImage, newGame.Id);
+                    if (FileSystem.FileExists(game.Icon)) newGame.Icon = PlayniteApi.Database.AddFile(game.Icon, newGame.Id);
+                    if (FileSystem.FileExists(game.BackgroundImage)) newGame.BackgroundImage = PlayniteApi.Database.AddFile(game.BackgroundImage, newGame.Id);
+
+                    PlayniteApi.Database.Games.Update(newGame);
+                }
+                
+                RefreshLibraryItems();
+            }));
 
             if (showGameAddDialog)
             {
