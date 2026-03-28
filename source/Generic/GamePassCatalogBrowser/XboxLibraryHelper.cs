@@ -204,7 +204,6 @@ namespace GamePassCatalogBrowser
                     if (progressArgs != null) progressArgs.CurrentProgressValue++;
 
                     if (!syncConsoleGames && game.IsConsole && !game.IsPC) continue;
-                    if (GameIdsInLibrary != null && GameIdsInLibrary.Contains(game.GameId)) continue;
                     if (currentSyncAddedIds.Contains(game.GameId)) continue;
 
                     var existingGame = LibraryGames?.FirstOrDefault(g => g.GameId.Equals(game.GameId, StringComparison.OrdinalIgnoreCase));
@@ -251,7 +250,7 @@ namespace GamePassCatalogBrowser
                         newGamesToAdd.Add(new Tuple<Game, GamePassGame>(newGame, game));
                         currentSyncAddedIds.Add(game.GameId);
                     }
-                    else if (existingGame.PluginId == pluginId)
+                    else if (existingGame.PluginId == pluginId || existingGame.PluginId == xboxLibraryPluginId)
                     {
                         var targetPlatforms = new List<Guid>();
                         if (game.IsPC) targetPlatforms.AddRange(platformsList);
@@ -393,7 +392,54 @@ namespace GamePassCatalogBrowser
             if (game.ProductType != ProductType.Game && game.ProductType != ProductType.EaGame) return false;
 
             var existingGame = existingGameCheck ?? GetLibraryGameFromGamePassGameAnySource(game);
-            if (existingGame != null) return false;
+            if (existingGame != null)
+            {
+                if (existingGame.PluginId == pluginId || existingGame.PluginId == xboxLibraryPluginId)
+                {
+                    var targetPlatforms = new List<Guid>();
+                    if (game.IsPC) targetPlatforms.AddRange(platformsList);
+                    if (game.IsConsole) targetPlatforms.AddRange(consolePlatformsList);
+
+                    var targetTags = new List<Guid>();
+                    if (game.IsPC) targetTags.Add(gameAddedTag.Id);
+                    if (game.IsConsole) targetTags.Add(gameAddedConsoleTag.Id);
+
+                    var changed = false;
+                    PlayniteApi.MainView.UIDispatcher.Invoke(new Action(() =>
+                    {
+                        using (PlayniteApi.Database.BufferedUpdate())
+                        {
+                            foreach (var tagId in targetTags)
+                            {
+                                var tag = PlayniteApi.Database.Tags.Get(tagId);
+                                if (tag != null && PlayniteUtilities.AddTagToGame(PlayniteApi, existingGame, tag)) changed = true;
+                            }
+
+                            var currentPlatforms = existingGame.PlatformIds != null ? new List<Guid>(existingGame.PlatformIds) : new List<Guid>();
+                            foreach (var platId in targetPlatforms)
+                            {
+                                if (!currentPlatforms.Contains(platId))
+                                {
+                                    currentPlatforms.Add(platId);
+                                    changed = true;
+                                }
+                            }
+                            if (changed)
+                            {
+                                existingGame.PlatformIds = currentPlatforms;
+                                PlayniteApi.Database.Games.Update(existingGame);
+                            }
+                        }
+                    }));
+
+                    if (changed && showGameAddDialog)
+                    {
+                        PlayniteApi.Dialogs.ShowMessage(string.Format(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_AddGameResultsMessage"), game.Name));
+                    }
+                    return changed;
+                }
+                return false;
+            }
 
             var newTags = new List<Guid>();
             if (game.IsPC) newTags.Add(gameAddedTag.Id);
