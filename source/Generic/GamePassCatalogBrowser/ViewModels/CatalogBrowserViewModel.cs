@@ -38,7 +38,7 @@ namespace GamePassCatalogBrowser.ViewModels
             set
             {
                 showGamesOnLibrary = value;
-                _gamePassGamesView.Refresh();
+                RefreshGamesView();
             }
         }
 
@@ -118,7 +118,7 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 _searchString = value;
                 NotifyPropertyChanged("SearchString");
-                _gamePassGamesView.Refresh();
+                RefreshGamesView();
             }
         }
 
@@ -130,6 +130,15 @@ namespace GamePassCatalogBrowser.ViewModels
         public ICollectionView Collections
         {
             get { return _collectionsView; }
+        }
+
+        public string GamesCountLabel
+        {
+            get
+            {
+                int count = _gamePassGamesView.Cast<object>().Count();
+                return string.Format(ResourceProvider.GetString("LOCGamePass_Catalog_Browser_WindowViewGamesCountLabel"), count);
+            }
         }
 
         public ICollectionView Categories
@@ -144,7 +153,7 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 _collectionsFilterString = value;
                 NotifyPropertyChanged("CollectionsFilterString");
-                _gamePassGamesView.Refresh();
+                RefreshGamesView();
             }
         }
 
@@ -155,7 +164,7 @@ namespace GamePassCatalogBrowser.ViewModels
             {
                 _categoriesFilterString = value;
                 NotifyPropertyChanged("CategoriesFilterString");
-                _gamePassGamesView.Refresh();
+                RefreshGamesView();
             }
         }
 
@@ -163,6 +172,12 @@ namespace GamePassCatalogBrowser.ViewModels
         private void NotifyPropertyChanged(string name)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
+
+        private void RefreshGamesView()
+        {
+            _gamePassGamesView.Refresh();
+            NotifyPropertyChanged(nameof(GamesCountLabel));
         }
 
         public CatalogBrowserViewModel(List<GamePassGame> list, IPlayniteAPI api, GamePassCatalogBrowserSettings pluginSettings)
@@ -361,6 +376,7 @@ namespace GamePassCatalogBrowser.ViewModels
                 {
                     AddButtonEnabled = false;
                     Collections.Refresh();
+                    RefreshGamesView();
                 }
             }, (gamePassGame) => AddButtonEnabled);
         }
@@ -370,6 +386,7 @@ namespace GamePassCatalogBrowser.ViewModels
             _gamePassGamesView = CollectionViewSource.GetDefaultView(newList);
             _gamePassGamesView.Filter = GamePassGameFilter;
             NotifyPropertyChanged("GamePassGames");
+            NotifyPropertyChanged(nameof(GamesCountLabel));
         }
     }
 }
